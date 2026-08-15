@@ -1,0 +1,54 @@
+# Python virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Byte-compiled / optimized / cache files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# PyTorch / YOLO weights & models (downloaded/trained at runtime)
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+*.weights
+
+# Generated output, crop images & runtime data files
+violations/crops/*
+violations/challans/*
+violations/violations_log.csv
+*.sqlite3
+*.db
+*.log
+
+# Environment variables & secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Operating System specific files
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.stackdump
+
+# macOS
+.DS_Store
+
+# IDE / Editor configuration
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -1,0 +1,11 @@
+streamlit>=1.30.0
+easyocr>=1.7.1
+pytesseract>=0.3.10
+ultralytics>=8.1.0
+pyyaml>=6.0.1
+pandas>=2.0.0
+opencv-python>=4.8.0
+pillow>=10.0.0
+matplotlib>=3.7.0
+numpy<2.0.0
+plotly>=5.18.0

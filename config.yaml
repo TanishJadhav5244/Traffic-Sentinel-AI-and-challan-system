@@ -1,0 +1,51 @@
+# Model configurations
+models:
+  # Path to the fine-tuned YOLOv8 model for helmet/rider/plate detection
+  # If this file doesn't exist, the system automatically falls back to yolov8n.pt in demo mode
+  detector_weights: "models/best_detector.pt"
+  
+  # Confidence thresholds
+  confidence:
+    rider: 0.35
+    helmet: 0.40
+    no_helmet: 0.35
+    license_plate: 0.40
+
+# OCR configurations
+ocr:
+  # Preferred engine: "easyocr" or "tesseract"
+  default_engine: "easyocr"
+  
+  # Path to Tesseract executable on Windows
+  # Update this if installed in a custom location
+  tesseract_path: "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
+  
+  # Preprocessing toggles
+  preprocessing:
+    resize_factor: 2.0
+    bilateral_filter: true
+    adaptive_threshold: true
+    deskew: true
+  
+  # Enhancer toggles (night-mode / low-light auto boost)
+  enhancer:
+    auto_low_light: true
+    luminance_threshold: 85
+    force_enhancement: false
+
+  # Regex to filter/verify Indian plates (e.g., MH12AB1234 or DL3CAY1111)
+  plate_regex: "^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}$"
+
+# Logging & Storage configuration
+storage:
+  # CSV file where violations are logged
+  csv_log_path: "violations/violations_log.csv"
+  
+  # Directory where cropped license plates and violator headshots are saved
+  crop_dir: "violations/crops"
+
+# Demo settings
+demo:
+  # Auto-download demo weights if custom weights are missing
+  use_demo_fallback: true
+  sample_video_url: "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/person-bicycle-car-detection.mp4"
