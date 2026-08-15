@@ -69,15 +69,7 @@ def load_config():
 
 config = load_config()
 
-# Initialize core system helpers
-@st.cache_resource
-def get_detector(_config):
-    return VehicleHelmetDetector(_config)
-
-@st.cache_resource
-def get_ocr_engine(_config):
-    return LicensePlateOCR(_config)
-
+# Fast DB init (CSV only, no heavy models)
 @st.cache_resource
 def get_db(_config):
     storage = _config.get("storage", {})
@@ -86,12 +78,25 @@ def get_db(_config):
         crop_dir=storage.get("crop_dir", "violations/crops")
     )
 
-detector = get_detector(config)
-ocr_engine = get_ocr_engine(config)
+# Heavy ML models — cached after first load
+@st.cache_resource(show_spinner=False)
+def get_detector(_config):
+    return VehicleHelmetDetector(_config)
+
+@st.cache_resource(show_spinner=False)
+def get_ocr_engine(_config):
+    return LicensePlateOCR(_config)
+
 db = get_db(config)
 
-# Hero banner with live stats
+# Hero banner with live stats (renders immediately from DB — no model needed)
 _violation_df = db.get_all_violations()
+
+# Lazy-load heavy ML models with visible spinner so UI renders first
+with st.spinner("🔄 Initialising AI Engine (YOLOv8 + EasyOCR)... please wait"):
+    detector = get_detector(config)
+    ocr_engine = get_ocr_engine(config)
+
 render_hero(violation_count=len(_violation_df), demo_mode=detector.demo_mode)
 
 # Sidebar Configuration
@@ -119,7 +124,7 @@ plate_conf = st.sidebar.slider("License Plate Conf", 0.10, 1.00, float(config.ge
 
 # Set runtime settings back into classes
 detector.thresholds["rider"] = rider_conf
-detector.thresholds["helmet"] = helmet_conf22
+detector.thresholds["helmet"] = helmet_conf
 detector.thresholds["license_plate"] = plate_conf
 
 # Low-light / Night mode controls
@@ -231,10 +236,10 @@ with tab_detector:
         is_video_input = (input_video_path is not None)
         
         if is_video_input and st.session_state.video_processing_active:
-            st.button("⏹ Stop Processing", type="secondary", use_container_width=True, on_click=stop_video_processing)
+            st.button("⏹ Stop Processing", type="secondary", width="stretch", on_click=stop_video_processing)
             run_pipeline = False
         else:
-            run_pipeline = st.button("▶ Run System Inference", type="primary", use_container_width=True)
+            run_pipeline = st.button("▶ Run System Inference", type="primary", width="stretch")
             if run_pipeline and is_video_input:
                 st.session_state.video_processing_active = True
 
@@ -292,7 +297,7 @@ with tab_detector:
                 # Annotate and show image
                 annotated_img = detector.draw_annotations(img_to_proc, detections, violations)
                 annotated_rgb = cv2.cvtColor(annotated_img, cv2.COLOR_BGR2RGB)
-                st.image(annotated_rgb, use_container_width=True)
+                st.image(annotated_rgb, width="stretch")
                 
                 # Show cards below
                 if logged_violations:
@@ -315,10 +320,10 @@ with tab_detector:
                             crop_c1, crop_c2 = st.columns(2)
                             with crop_c1:
                                 if r_crp.size > 0:
-                                    st.image(cv2.cvtColor(r_crp, cv2.COLOR_BGR2RGB), caption="Rider", use_container_width=True)
+                                    st.image(cv2.cvtColor(r_crp, cv2.COLOR_BGR2RGB), caption="Rider", width="stretch")
                             with crop_c2:
                                 if p_crp.size > 0:
-                                    st.image(cv2.cvtColor(p_crp, cv2.COLOR_BGR2RGB), caption="Plate", use_container_width=True)
+                                    st.image(cv2.cvtColor(p_crp, cv2.COLOR_BGR2RGB), caption="Plate", width="stretch")
                                     
                             # Download button for E-Challan
                             c_path = rec.get("challan_path")
@@ -330,7 +335,7 @@ with tab_detector:
                                         file_name=f"challan_{rec['violation_id']}.png",
                                         mime="image/png",
                                         key=f"dl_{rec['violation_id']}_{idx}",
-                                        use_container_width=True
+                                        width="stretch"
                                     )
                 else:
                     st.success("✅ No Helmet Violations detected.")
@@ -418,7 +423,7 @@ with tab_detector:
                             # Draw bounding boxes and update video frame
                             annotated = detector.draw_annotations(frame, detections, violations)
                             annotated_rgb = cv2.cvtColor(annotated, cv2.COLOR_BGR2RGB)
-                            video_placeholder.image(annotated_rgb, use_container_width=True)
+                            video_placeholder.image(annotated_rgb, width="stretch")
                             
                             # Keep frame rate reasonable
                             time.sleep(0.01)
@@ -449,7 +454,7 @@ with tab_database:
 
     col_reload, col_spacer = st.columns([1, 4])
     with col_reload:
-        if st.button("🔄 Reload Data", type="secondary", use_container_width=True):
+        if st.button("🔄 Reload Data", type="secondary", width="stretch"):
             st.cache_resource.clear()
             st.rerun()
 
@@ -503,7 +508,7 @@ with tab_database:
         st.divider()
 
         # Search bar
-        search_query = st.text_input("🔍 Search by Plate Number", "")
+        search_query = st.text_input("🔍 Search by Plate Number", "", autocomplete="off")
         if search_query:
             df_filtered = df[df["plate_text"].str.contains(search_query.upper(), na=False)]
         else:
@@ -512,7 +517,7 @@ with tab_database:
         # Display table
         st.dataframe(
             df_filtered[["violation_id", "timestamp", "plate_text", "ocr_confidence", "helmet_status", "owner_name", "vehicle_model"]],
-            use_container_width=True
+            width="stretch"
         )
         
         # Interactive Grid to see crops and challans
@@ -530,19 +535,19 @@ with tab_database:
                 with col_rider_crop:
                     r_path = row["rider_crop_path"]
                     if os.path.exists(str(r_path)):
-                        st.image(r_path, caption="Rider Head Crop", use_container_width=True)
+                        st.image(r_path, caption="Rider Head Crop", width="stretch")
                     else:
                         st.caption("No Rider Crop Saved")
                 with col_plate_crop:
                     p_path = row["plate_crop_path"]
                     if os.path.exists(str(p_path)):
-                        st.image(p_path, caption="License Plate", use_container_width=True)
+                        st.image(p_path, caption="License Plate", width="stretch")
                     else:
                         st.caption("No Plate Crop Saved")
                 with col_challan:
                     c_path = row.get("challan_path", "")
                     if pd.notna(c_path) and os.path.exists(str(c_path)):
-                        st.image(str(c_path), caption="Challan Ticket Preview", use_container_width=True)
+                        st.image(str(c_path), caption="Challan Ticket Preview", width="stretch")
                         with open(str(c_path), "rb") as f:
                             st.download_button(
                                 label="📥 Download Challan PNG",
@@ -550,7 +555,7 @@ with tab_database:
                                 file_name=f"challan_{row['violation_id']}.png",
                                 mime="image/png",
                                 key=f"db_dl_{row['violation_id']}_{idx}",
-                                use_container_width=True
+                                width="stretch"
                             )
                     else:
                         st.caption("No Challan Ticket Generated")
@@ -566,10 +571,10 @@ with tab_database:
                 data=csv_data,
                 file_name="helmet_violations_report.csv",
                 mime="text/csv",
-                use_container_width=True
+                width="stretch"
             )
         with col_act2:
-            if st.button("🗑️ Wipe Database Logs", type="secondary", use_container_width=True):
+            if st.button("🗑️ Wipe Database Logs", type="secondary", width="stretch"):
                 db.clear_database()
                 st.warning("All records and cropped image binaries have been deleted.")
                 st.rerun()
@@ -639,15 +644,15 @@ with tab_ocr_playground:
             # Render processing columns
             c_orig, c_enh, c_gray, c_filtered, c_bin = st.columns(5)
             with c_orig:
-                st.image(cv2.cvtColor(raw_plate_img, cv2.COLOR_BGR2RGB), caption=f"1. Raw Crop ({lum_in:.0f} L)", use_container_width=True)
+                st.image(cv2.cvtColor(raw_plate_img, cv2.COLOR_BGR2RGB), caption=f"1. Raw Crop ({lum_in:.0f} L)", width="stretch")
             with c_enh:
-                st.image(cv2.cvtColor(enhanced_bgr, cv2.COLOR_BGR2RGB), caption=f"2. Night Boost ({lum_out:.0f} L)", use_container_width=True)
+                st.image(cv2.cvtColor(enhanced_bgr, cv2.COLOR_BGR2RGB), caption=f"2. Night Boost ({lum_out:.0f} L)", width="stretch")
             with c_gray:
-                st.image(gray, caption="3. Grayscale 2x", use_container_width=True)
+                st.image(gray, caption="3. Grayscale 2x", width="stretch")
             with c_filtered:
-                st.image(filtered, caption="4. Bilateral Filter", use_container_width=True)
+                st.image(filtered, caption="4. Bilateral Filter", width="stretch")
             with c_bin:
-                st.image(thresholded, caption="5. Otsu Binary", use_container_width=True)
+                st.image(thresholded, caption="5. Otsu Binary", width="stretch")
                 
             st.divider()
             
@@ -705,8 +710,9 @@ with tab_rto:
             value=st.session_state.rto_query_input,
             key="rto_text_input",
             placeholder="MH12AB1234",
+            autocomplete="off",
         )
-        submit_search = st.form_submit_button("🔎 Query Vehicle Details", use_container_width=True)
+        submit_search = st.form_submit_button("🔎 Query Vehicle Details", width="stretch")
     render_panel_end()
 
     if submit_search or (search_plate and not submit_search):
@@ -794,7 +800,7 @@ with tab_analytics:
 
     col_reload_a, col_spacer_a = st.columns([1, 4])
     with col_reload_a:
-        if st.button("🔄 Refresh Analytics", type="secondary", use_container_width=True, key="btn_analytics_reload"):
+        if st.button("🔄 Refresh Analytics", type="secondary", width="stretch", key="btn_analytics_reload"):
             st.cache_resource.clear()
             st.rerun()
 
@@ -839,7 +845,7 @@ with tab_analytics:
             fig_daily.update_layout(**_PLOTLY_LAYOUT)
             fig_daily.update_xaxes(showgrid=False)
             fig_daily.update_yaxes(gridcolor="rgba(255,255,255,0.06)")
-            st.plotly_chart(fig_daily, use_container_width=True)
+            st.plotly_chart(fig_daily, width="stretch")
         else:
             st.caption("Not enough timestamped data.")
 
@@ -871,7 +877,7 @@ with tab_analytics:
                     xaxis=dict(title="Hour (24h)", dtick=2, showgrid=False),
                     yaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
                 )
-                st.plotly_chart(fig_hr, use_container_width=True)
+                st.plotly_chart(fig_hr, width="stretch")
             else:
                 st.caption("No hourly data available.")
 
@@ -891,7 +897,7 @@ with tab_analytics:
                     textfont=dict(size=12),
                 )
                 fig_state.update_layout(**_PLOTLY_LAYOUT, showlegend=True)
-                st.plotly_chart(fig_state, use_container_width=True)
+                st.plotly_chart(fig_state, width="stretch")
             else:
                 st.caption("Not enough state data to visualize.")
 
@@ -919,7 +925,7 @@ with tab_analytics:
                     xaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
                     coloraxis_showscale=False,
                 )
-                st.plotly_chart(fig_mfr, use_container_width=True)
+                st.plotly_chart(fig_mfr, width="stretch")
             else:
                 st.caption("Not enough manufacturer data.")
 
@@ -941,7 +947,7 @@ with tab_analytics:
                     yaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
                     coloraxis_showscale=False,
                 )
-                st.plotly_chart(fig_conf, use_container_width=True)
+                st.plotly_chart(fig_conf, width="stretch")
             else:
                 st.caption("No OCR confidence data recorded yet.")
 
@@ -966,7 +972,7 @@ with tab_analytics:
                 xaxis=dict(gridcolor="rgba(255,255,255,0.06)", dtick=1),
                 coloraxis_showscale=False,
             )
-            st.plotly_chart(fig_top, use_container_width=True)
+            st.plotly_chart(fig_top, width="stretch")
         else:
             st.caption("No repeat plates recorded.")
 
@@ -982,5 +988,5 @@ with tab_analytics:
                 data=csv_bytes,
                 file_name="analytics_export.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )

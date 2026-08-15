@@ -22,7 +22,7 @@
     background-size: 40px 40px;
     animation: grid-drift 20s linear infinite;
     pointer-events: none;
-    z-index: 0;
+    z-index: -1;
 }
 
 /* Scanline overlay */
@@ -38,7 +38,7 @@
         rgba(0,0,0,0.03) 4px
     );
     pointer-events: none;
-    z-index: 0;
+    z-index: -1;
 }
 
 @keyframes grid-drift {
