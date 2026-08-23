@@ -17,38 +17,42 @@ class VehicleHelmetDetector:
             "rider": 0.35, "helmet": 0.40, "no_helmet": 0.35, "license_plate": 0.40
         })
         
-        self.demo_mode = False
         self.model = None
+        self.has_custom_classes = False
         self._load_model()
 
     def _load_model(self):
-        """Loads the custom YOLOv8 model, or falls back to yolov8n.pt in demo mode."""
+        """Loads the trained YOLOv8 model or standard YOLOv8 weights."""
         if os.path.exists(self.model_path):
             print(f"[Detector] Loading custom weights from {self.model_path}...")
             try:
                 self.model = YOLO(self.model_path)
-                # Check class names
                 self.names = self.model.names
+                self.has_custom_classes = any(
+                    any(k in str(v).lower() for k in ["rider", "helmet", "plate", "license"])
+                    for v in self.names.values()
+                )
                 print(f"[Detector] Custom model loaded successfully with classes: {self.names}")
             except Exception as e:
-                print(f"[Detector] Error loading custom model: {e}. Falling back to demo mode.")
-                self._setup_demo_mode()
+                print(f"[Detector] Error loading custom model: {e}. Loading standard YOLO weights.")
+                self._setup_yolo_model()
         else:
-            print(f"[Detector] Custom weights not found at {self.model_path}. Setting up Demo Mode.")
-            self._setup_demo_mode()
+            print(f"[Detector] Custom weights not found at '{self.model_path}'. Loading generic YOLOv8n (COCO).")
+            print(f"[Detector] WARNING: COCO mode cannot detect helmets or license plates. "
+                  f"Only person+motorcycle rider association is available.")
+            self._setup_yolo_model()
 
-    def _setup_demo_mode(self):
-        """Initializes standard yolov8n.pt and flags demo mode active."""
-        self.demo_mode = True
-        print("[Detector] Loading standard yolov8n.pt for motorcycle/rider detection...")
+    def _setup_yolo_model(self):
+        """Initializes standard YOLOv8 model for vehicle and rider detection."""
         try:
             self.model = YOLO("yolov8n.pt")
             self.names = self.model.names
+            self.has_custom_classes = False
+            print("[Detector] YOLOv8n (COCO) model initialized. Helmet/plate detection unavailable.")
         except Exception as e:
-            print(f"[Detector] Error loading yolov8n.pt: {e}")
-            # Fall back to complete mock if even yolov8n fails
+            print(f"[Detector] CRITICAL: Error loading YOLO model: {e}")
             self.model = None
-            self.names = {0: "rider", 1: "helmet", 2: "no-helmet", 3: "license-plate"}
+            self.names = {}
 
     def detect(self, img):
         """
@@ -64,8 +68,8 @@ class VehicleHelmetDetector:
             return {"riders": [], "helmets": [], "no_helmets": [], "plates": []}
 
         if self.model is None:
-            # Complete mock mode fallback
-            return self._generate_mock_detections(img)
+            print("[Detector] No model loaded — returning empty detections.")
+            return {"riders": [], "helmets": [], "no_helmets": [], "plates": []}
 
         # Run inference
         results = self.model(img, verbose=False)[0]
@@ -78,8 +82,8 @@ class VehicleHelmetDetector:
             "plates": []
         }
         
-        # If in custom production mode
-        if not self.demo_mode:
+        if self.has_custom_classes:
+            # Custom-trained model with rider/helmet/no-helmet/plate classes
             for box in boxes:
                 cls_id = int(box.cls[0])
                 conf = float(box.conf[0])
@@ -97,9 +101,10 @@ class VehicleHelmetDetector:
                 elif ("plate" in class_name or "license" in class_name) and conf >= self.thresholds.get("license_plate", 0.40):
                     detections["plates"].append({"box": xyxy, "conf": conf})
         else:
-            # Demo Mode: COCO class map -> Heuristic projection of helmets & plates
-            # COCO mapping: 0: person, 3: motorcycle
-            h, w = img.shape[:2]
+            # Standard YOLO COCO class mapping (0: person, 3: motorcycle)
+            # NOTE: COCO mode can only detect persons and motorcycles.
+            # It CANNOT detect helmets, no-helmets, or license plates.
+            # Rider association (person on motorcycle) is the only inference available.
             persons = []
             motorcycles = []
             
@@ -118,83 +123,19 @@ class VehicleHelmetDetector:
                 m_box = motor["box"]
                 m_x_center = (m_box[0] + m_box[2]) / 2
                 
-                # Check for person overlapping with motorcycle
-                rider_found = False
                 for person in persons:
                     p_box = person["box"]
                     p_x_center = (p_box[0] + p_box[2]) / 2
                     
-                    # If person is horizontally aligned with motorcycle and sits above/overlaps it
                     if abs(p_x_center - m_x_center) < (m_box[2] - m_box[0]) * 0.7:
-                        # Person bottom is near/below motorcycle top
                         if p_box[3] > m_box[1] - (m_box[3] - m_box[1]) * 0.3:
-                            rider_found = True
                             detections["riders"].append({"box": p_box, "conf": person["conf"]})
-                            
-                            # Heuristic for helmet/no-helmet:
-                            # We crop the head (top 20% of person box) and simulate helmet detection
-                            head_h = int((p_box[3] - p_box[1]) * 0.25)
-                            head_box = [p_box[0], p_box[1], p_box[2], p_box[1] + head_h]
-                            
-                            # Deterministic based on coordinates to keep video consistent
-                            is_helmet = (p_box[0] + p_box[1]) % 2 == 0
-                            
-                            if is_helmet:
-                                detections["helmets"].append({"box": head_box, "conf": 0.85})
-                            else:
-                                detections["no_helmets"].append({"box": head_box, "conf": 0.88})
-                                
-                # If rider on motorcycle, project a license plate at the rear bottom of the motorcycle
-                if rider_found or len(motorcycles) == 1:
-                    # License plates are usually at the bottom-center of the motorcycle
-                    # Let's project a bounding box near the bottom of the motorcycle
-                    m_w = m_box[2] - m_box[0]
-                    m_h = m_box[3] - m_box[1]
-                    
-                    plate_w = int(m_w * 0.35)
-                    plate_h = int(m_h * 0.15)
-                    
-                    # Place at bottom middle
-                    px1 = int(m_x_center - plate_w / 2)
-                    py1 = int(m_box[3] - plate_h - 10)
-                    px2 = px1 + plate_w
-                    py2 = py1 + plate_h
-                    
-                    # Bound checking
-                    px1 = max(0, min(px1, w))
-                    py1 = max(0, min(py1, h))
-                    px2 = max(0, min(px2, w))
-                    py2 = max(0, min(py2, h))
-                    
-                    detections["plates"].append({"box": np.array([px1, py1, px2, py2]), "conf": 0.90})
 
-        if self.demo_mode and len(detections["riders"]) == 0 and len(detections["plates"]) == 0:
-            return self._generate_mock_detections(img)
+            # No helmet detection, no plate detection — these require custom weights.
+            # detections["helmets"], detections["no_helmets"], detections["plates"]
+            # remain empty, which is the honest result.
 
         return detections
-
-    def _generate_mock_detections(self, img):
-        """Generates completely mock detections if no model is loaded at all."""
-        h, w = img.shape[:2]
-        # Draw mock rider, plate, and no-helmet box matching traffic_sample.png geometry
-        # Rider box (encloses rider torso, head, and motorcycle body)
-        rx1, ry1 = int(w * 0.40), int(h * 0.35)
-        rx2, ry2 = int(w * 0.68), int(h * 0.90)
-        
-        # Head (no-helmet box)
-        hx1, hy1 = int(w * 0.47), int(h * 0.37)
-        hx2, hy2 = int(w * 0.54), int(h * 0.46)
-        
-        # License plate box
-        px1, py1 = int(w * 0.54), int(h * 0.76)
-        px2, py2 = int(w * 0.67), int(h * 0.81)
-        
-        return {
-            "riders": [{"box": np.array([rx1, ry1, rx2, ry2]), "conf": 0.92}],
-            "helmets": [],
-            "no_helmets": [{"box": np.array([hx1, hy1, hx2, hy2]), "conf": 0.88}],
-            "plates": [{"box": np.array([px1, py1, px2, py2]), "conf": 0.90}]
-        }
 
     def associate_violations(self, detections):
         """

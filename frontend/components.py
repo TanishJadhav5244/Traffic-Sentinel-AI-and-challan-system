@@ -1,24 +1,45 @@
 from contextlib import contextmanager
 
+# pyrefly: ignore [missing-import]
 import streamlit as st
 
 
-def render_hero(violation_count: int = 0, demo_mode: bool = False):
-    mode_label = "Demo Mode" if demo_mode else "Live Model"
-    mode_class = "status-demo" if demo_mode else "status-live"
+def render_gov_header():
+    """Renders top official Government of India / MoRTH portal banner."""
+    st.markdown("""
+    <div class="gov-top-bar">
+        <div class="gov-top-left">
+            <span class="gov-emblem">🏛️</span>
+            <div class="gov-text-group">
+                <span class="gov-authority">GOVERNMENT OF INDIA • MINISTRY OF ROAD TRANSPORT & HIGHWAYS</span>
+                <span class="gov-sub-authority">National Intelligent Traffic Enforcement Portal (e-Challan AI System)</span>
+            </div>
+        </div>
+        <div class="gov-top-right">
+            <span class="gov-badge-official">OFFICIAL PORTAL</span>
+            <span class="gov-helpline">📞 Helpline: 1033 / 112</span>
+        </div>
+    </div>
+    <div class="gov-tricolor-strip"></div>
+    """, unsafe_allow_html=True)
+
+
+def render_hero(violation_count: int = 0):
+    mode_label = "Live AI Surveillance Active"
+    mode_class = "status-live"
     st.markdown(f"""
     <div class="hero-banner fade-in">
         <div class="hero-glow"></div>
         <div class="hero-content">
-            <div class="hero-badge">AI-Powered Traffic Enforcement</div>
-            <h1 class="hero-title">Traffic Sentinel AI</h1>
+            <div class="hero-badge">🏛️ MoRTH Integrated Traffic Intelligence & e-Challan Engine</div>
+            <h1 class="hero-title">Traffic Sentinel AI Portal</h1>
             <p class="hero-subtitle">
-                Real-time helmet violation detection, license plate OCR, and automated e-challan generation
+                Automated helmet violation detection, high-speed license plate OCR, and instant e-challan generation grid
             </p>
             <div class="hero-stats">
                 <div class="hero-stat">
                     <span class="hero-stat-value">{violation_count}</span>
-                    <span class="hero-stat-label">Violations Logged</span>
+                    <span class="hero-stat-label">Violations Recorded</span>
                 </div>
                 <div class="hero-stat">
                     <span class="hero-stat-value">4</span>
@@ -28,7 +49,7 @@ def render_hero(violation_count: int = 0, demo_mode: bool = False):
                     <span class="hero-stat-value">
                         <span class="status-dot {mode_class}"></span>{mode_label}
                     </span>
-                    <span class="hero-stat-label">System Status</span>
+                    <span class="hero-stat-label">Grid Status</span>
                 </div>
             </div>
         </div>
@@ -111,3 +132,54 @@ def render_pipeline_steps(current_step: int = 0):
         if i < len(steps) - 1:
             parts.append('<div class="step-connector"></div>')
     st.markdown(f'<div class="pipeline-track">{"".join(parts)}</div>', unsafe_allow_html=True)
+
+
+def render_cctv_hud_header(cam_id: str = "CAM-01", location: str = "MG Road Crossing", fps: int = 30):
+    """Renders visual CCTV stream HUD overlay bar."""
+    st.markdown(f"""
+    <div class="cctv-hud">
+        <div class="cctv-hud-left">
+            <span class="cctv-rec-dot"></span>
+            <span class="cctv-rec-text">REC ● 1080p {fps}FPS</span>
+            <span class="cctv-cam-badge">{cam_id}</span>
+            <span class="cctv-location">📍 {location}</span>
+        </div>
+        <div class="cctv-hud-right">
+            <span class="cctv-timestamp">AI LIVE SURVEILLANCE FEED</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_telemetry_badge(detector_ms: float = 14.5, ocr_ms: float = 38.2, fps: float = 24.5):
+    """Renders real-time AI hardware telemetry bar."""
+    st.markdown(f"""
+    <div class="telemetry-bar">
+        <div class="telemetry-item">
+            <span class="telemetry-label">YOLOv8 Latency</span>
+            <span class="telemetry-val">{detector_ms:.1f} ms</span>
+        </div>
+        <div class="telemetry-divider"></div>
+        <div class="telemetry-item">
+            <span class="telemetry-label">OCR Speed</span>
+            <span class="telemetry-val">{ocr_ms:.1f} ms</span>
+        </div>
+        <div class="telemetry-divider"></div>
+        <div class="telemetry-item">
+            <span class="telemetry-label">Throughput</span>
+            <span class="telemetry-val">{fps:.1f} FPS</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+def render_status_chip(status: str) -> str:
+    """Returns HTML for styled status badges (Pending, Paid, Disputed)."""
+    s = str(status).strip().capitalize()
+    if s == "Paid":
+        return '<span style="background:#dcfce7; color:#15803d; border:1px solid #86efac; padding:2px 8px; border-radius:12px; font-weight:600; font-size:0.8rem;">🟢 Paid</span>'
+    elif s == "Disputed":
+        return '<span style="background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5; padding:2px 8px; border-radius:12px; font-weight:600; font-size:0.8rem;">🔴 Disputed</span>'
+    else:
+        return '<span style="background:#fef3c7; color:#b45309; border:1px solid #fcd34d; padding:2px 8px; border-radius:12px; font-weight:600; font-size:0.8rem;">🟡 Pending</span>'
+

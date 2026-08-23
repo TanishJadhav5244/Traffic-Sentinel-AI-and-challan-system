@@ -96,30 +96,34 @@ class TestVehicleHelmetDetector(unittest.TestCase):
         }
         self.detector = VehicleHelmetDetector(self.config)
 
-    def test_demo_mode_fallback(self):
-        # Since model weights path doesn't exist, should flag demo_mode True
-        self.assertTrue(self.detector.demo_mode)
+    def test_detector_initialization(self):
+        self.assertFalse(self.detector.has_custom_classes)
+        self.assertIsNotNone(self.detector.model)
 
-    def test_detect_structure(self):
+    def test_detect_blank_image_returns_empty_no_mock(self):
+        # Blank image must return 0 riders/helmets/plates — NO fabricated mock detections
         dummy_frame = np.full((300, 400, 3), 128, dtype=np.uint8)
         detections = self.detector.detect(dummy_frame)
-        self.assertIn("riders", detections)
-        self.assertIn("helmets", detections)
-        self.assertIn("no_helmets", detections)
-        self.assertIn("plates", detections)
+        self.assertEqual(len(detections["riders"]), 0)
+        self.assertEqual(len(detections["helmets"]), 0)
+        self.assertEqual(len(detections["no_helmets"]), 0)
+        self.assertEqual(len(detections["plates"]), 0)
 
 
 class TestRTOHelper(unittest.TestCase):
-    def test_query_rto_known_plate(self):
-        info = query_rto("MH12DE5678")
-        self.assertEqual(info["status"], "Active")
-        self.assertEqual(info["owner_name"], "Rajesh Kumar")
-        self.assertIn("vehicle_model", info)
+    def test_query_rto_unconfigured(self):
+        # Default config without API key returns clearly labeled unavailable data
+        info = query_rto("MH12DE5678", config={})
+        self.assertEqual(info["owner_name"], "[No RTO API Configured]")
+        self.assertEqual(info["status"], "Unconfigured")
+        self.assertEqual(info["lookup_status"], "api_not_configured")
 
-    def test_query_rto_fallback(self):
-        info = query_rto("KA99ZZ9999")
-        self.assertEqual(info["status"], "Active")
-        self.assertIn("owner_name", info)
+    def test_query_rto_demo_opt_in(self):
+        # Explicit opt-in demo mode returns labeled demo records
+        config = {"rto": {"demo_fallback": True}}
+        info = query_rto("MH12DE5678", config=config)
+        self.assertIn("[DEMO]", info["owner_name"])
+        self.assertEqual(info["api_source"], "Demo Fallback Registry")
 
 
 class TestChallanGenerator(unittest.TestCase):
@@ -189,13 +193,29 @@ class TestViolationDatabase(unittest.TestCase):
         self.assertEqual(analytics["total_fines"], 2000.0)
         self.assertFalse(analytics["state_counts"].empty)
 
-    def test_clear_database(self):
+    def test_update_violation_status(self):
         plate_crop = np.full((30, 90, 3), 200, dtype=np.uint8)
-        self.db.log_violation("00:00:01", plate_crop, plate_crop, "MH12DE5678", 0.95)
-        self.db.clear_database()
+        record = self.db.log_violation("00:00:01", plate_crop, plate_crop, "KA01AB1234", 0.90)
+        v_id = record["violation_id"]
+        
+        self.assertEqual(record["status"], "Pending")
+        updated = self.db.update_violation_status(v_id, "Paid")
+        self.assertTrue(updated)
+        
         df = self.db.get_all_violations()
-        self.assertTrue(df.empty)
+        self.assertEqual(df.iloc[0]["status"], "Paid")
+
+    def test_generate_challan_pdf(self):
+        from backend.challan_generator import generate_challan_pdf
+        plate_crop = np.full((30, 90, 3), 200, dtype=np.uint8)
+        rider_crop = np.full((80, 80, 3), 180, dtype=np.uint8)
+        rto_info = {"owner_name": "Test Owner", "vehicle_model": "Test Bike"}
+        
+        pdf_path = generate_challan_pdf("TEST1234", "2026-08-23 12:00:00", "MH12AB1234", rto_info, plate_crop, rider_crop, output_dir=self.temp_dir)
+        self.assertTrue(os.path.exists(pdf_path))
+        self.assertTrue(pdf_path.endswith(".pdf"))
 
 
 if __name__ == "__main__":
     unittest.main()
+

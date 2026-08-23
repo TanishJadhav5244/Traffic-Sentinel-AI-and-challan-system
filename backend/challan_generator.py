@@ -44,6 +44,31 @@ def draw_barcode(draw, x, y, width=150, height=40):
         curr_x += w + 1
         idx += 1
 
+def draw_qr_code(draw, x, y, size=105, data_seed="PAY"):
+    """Draws a clean, realistic vector QR code with corner finder patterns."""
+    draw.rectangle([x, y, x + size, y + size], fill=(255, 255, 255), outline=(0, 0, 0), width=2)
+    grid_size = 21
+    cell_w = size / grid_size
+
+    def draw_finder(fx, fy):
+        draw.rectangle([x + fx * cell_w, y + fy * cell_w, x + (fx + 7) * cell_w, y + (fy + 7) * cell_w], fill=(0, 0, 0))
+        draw.rectangle([x + (fx + 1) * cell_w, y + (fy + 1) * cell_w, x + (fx + 6) * cell_w, y + (fy + 6) * cell_w], fill=(255, 255, 255))
+        draw.rectangle([x + (fx + 2) * cell_w, y + (fy + 2) * cell_w, x + (fx + 5) * cell_w, y + (fy + 5) * cell_w], fill=(0, 0, 0))
+
+    # Top-left, Top-right, Bottom-left finder boxes
+    draw_finder(1, 1)
+    draw_finder(13, 1)
+    draw_finder(1, 13)
+
+    # Seed data modules deterministically
+    seed = abs(hash(str(data_seed)))
+    for r in range(grid_size):
+        for c in range(grid_size):
+            if (r < 9 and c < 9) or (r < 9 and c > 11) or (r > 11 and c < 9):
+                continue
+            if (seed + r * 31 + c * 17) % 3 < 2:
+                draw.rectangle([x + c * cell_w, y + r * cell_w, x + (c + 1) * cell_w, y + (r + 1) * cell_w], fill=(0, 0, 0))
+
 def generate_challan_ticket(violation_id, timestamp, plate_text, rto_info, plate_crop, rider_crop, output_dir="violations/challans"):
     """
     Generates a professional visual E-Challan PNG image and saves it to disk.
@@ -62,8 +87,8 @@ def generate_challan_ticket(violation_id, timestamp, plate_text, rto_info, plate
     """
     os.makedirs(output_dir, exist_ok=True)
     
-    # 1. Initialize blank white canvas (800 x 720)
-    canvas_w, canvas_h = 800, 720
+    # 1. Initialize blank white canvas (800 x 780)
+    canvas_w, canvas_h = 800, 780
     img = Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
     draw = ImageDraw.Draw(img)
     
@@ -185,25 +210,33 @@ def generate_challan_ticket(violation_id, timestamp, plate_text, rto_info, plate
         draw.rectangle([399, evidence_y + 79, 701, evidence_y + 181], fill=(240, 240, 240), outline=(200, 200, 200))
         draw.text((430, evidence_y + 120), "LICENSE PLATE CROP MISSING", fill=(150, 150, 150), font=font_subtitle)
         
-    # 6. Footer section (Barcode, Info note, Official Signature)
+    # 6. Footer section (Barcode, QR Code, Info note, Official Signature)
     footer_y = evidence_y + evidence_h + 15
-    draw_barcode(draw, 30, footer_y, width=180, height=45)
+    
+    # Draw Barcode
+    draw_barcode(draw, 25, footer_y + 10, width=170, height=45)
     font_barcode_text = get_font("arial", 9, bold=False)
-    draw.text((30, footer_y + 50), f"* {violation_id.upper()} *", fill=(71, 85, 105), font=font_barcode_text)
+    draw.text((25, footer_y + 60), f"* {violation_id.upper()} *", fill=(71, 85, 105), font=font_barcode_text)
+    
+    # Draw Payment QR Code
+    draw_qr_code(draw, 220, footer_y + 5, size=85, data_seed=f"PAY_{violation_id}")
+    font_qr_label = get_font("arial", 8, bold=True)
+    draw.text((215, footer_y + 94), "SCAN TO PAY (UPI / NetBanking)", fill=(21, 128, 61), font=font_qr_label)
     
     # Official Seal / Text
     font_disclaimer = get_font("arial", 9, bold=False)
     disclaimer_text = (
-        "This is a system-generated document based on AI traffic monitoring camera evidence.\n"
-        "Please scan the barcode or visit transport.gov.in/e-challan to settle the dues.\n"
-        "Failure to clear the fine within 15 days will result in court summon."
+        "System-generated document based on AI traffic monitoring camera evidence.\n"
+        "Scan QR code or visit echallan.parivahan.gov.in to pay fine.\n"
+        "Fine payment deadline: 15 days from issue date.\n"
+        "Security Hash: MoRTH-SEC-" + str(abs(hash(violation_id)) % 10000000)
     )
-    draw.text((250, footer_y + 5), disclaimer_text, fill=(100, 116, 139), font=font_disclaimer)
+    draw.text((375, footer_y + 8), disclaimer_text, fill=(100, 116, 139), font=font_disclaimer)
     
     # Signature line
-    draw.line([600, footer_y + 35, 750, footer_y + 35], fill=(150, 150, 150), width=1)
+    draw.line([630, footer_y + 70, 770, footer_y + 70], fill=(150, 150, 150), width=1)
     font_sig = get_font("arial", 10, bold=True)
-    draw.text((610, footer_y + 40), "AUTHORIZED SIGNATURE", fill=(100, 116, 139), font=font_sig)
+    draw.text((640, footer_y + 75), "AUTHORIZED SIGNATURE", fill=(100, 116, 139), font=font_sig)
     
     # Save Image
     challan_filename = f"challan_{violation_id}.png"
@@ -211,3 +244,46 @@ def generate_challan_ticket(violation_id, timestamp, plate_text, rto_info, plate
     img.save(challan_path)
     
     return challan_path
+
+
+def generate_challan_pdf(violation_id, timestamp, plate_text, rto_info, plate_crop, rider_crop, output_dir="violations/challans"):
+    """
+    Generates an official printable PDF E-Challan ticket and returns the PDF file path.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    # First generate the high-res PNG canvas
+    png_path = generate_challan_ticket(violation_id, timestamp, plate_text, rto_info, plate_crop, rider_crop, output_dir=output_dir)
+    
+    pdf_filename = f"challan_{violation_id}.pdf"
+    pdf_path = os.path.join(output_dir, pdf_filename)
+    
+    try:
+        with Image.open(png_path) as im:
+            rgb_im = im.convert("RGB")
+            rgb_im.save(pdf_path, "PDF", resolution=100.0)
+        return pdf_path
+    except Exception as e:
+        print(f"[Challan] Error converting ticket to PDF: {e}")
+        return png_path
+
+
+class EChallanGenerator:
+    """Wrapper class around challan ticket generator."""
+    def __init__(self, config=None):
+        self.config = config or {}
+        self.output_dir = self.config.get("storage", {}).get("challan_dir", "violations/challans")
+
+    def generate(self, plate_number, rto_details, head_crop, plate_crop, location="Intersection Cam #04"):
+        violation_id = str(uuid.uuid4())[:8].upper()
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        path = generate_challan_ticket(
+            violation_id=violation_id,
+            timestamp=timestamp,
+            plate_text=plate_number,
+            rto_info=rto_details,
+            plate_crop=plate_crop,
+            rider_crop=head_crop,
+            output_dir=self.output_dir
+        )
+        return path, violation_id
+

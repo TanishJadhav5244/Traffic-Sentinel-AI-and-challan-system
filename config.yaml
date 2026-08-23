@@ -44,6 +44,19 @@ storage:
   # Directory where cropped license plates and violator headshots are saved
   crop_dir: "violations/crops"
 
+# RTO Lookup configuration
+rto:
+  # Mode: "api" (for real RTO API endpoint) or "demo" (explicit labeled demo registry)
+  mode: "api"
+  # API Endpoint URL (e.g., https://api.example-rto.com/v1/vehicle)
+  api_url: ""
+  # API Key / Authentication token
+  api_key: ""
+  # Timeout in seconds for HTTP requests
+  timeout_seconds: 5.0
+  # Opt-in demo fallback mode: if true, uses explicit labeled mock data when API key is missing
+  demo_fallback: false
+
 # Demo settings
 demo:
   # Auto-download demo weights if custom weights are missing

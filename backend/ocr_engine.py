@@ -40,6 +40,10 @@ class LicensePlateOCR:
         tesseract_path = self.ocr_config.get("tesseract_path", r"C:\Program Files\Tesseract-OCR\tesseract.exe")
         self._configure_tesseract(tesseract_path)
 
+    @property
+    def engine_type(self):
+        return self.default_engine
+
     def _configure_tesseract(self, path):
         """Sets up pytesseract path and validates if it's available."""
         global _tesseract_available
@@ -140,8 +144,11 @@ class LicensePlateOCR:
 
     def clean_plate_text(self, text):
         """
-        Cleans and standardizes the OCR text, filtering for Indian license plate patterns.
-        Indian format example: MH 12 AB 1234 -> MH12AB1234
+        Cleans and standardizes OCR text using Indian license plate structure heuristics.
+        Handles formats:
+        - 10 chars: LL NN LL NNNN (e.g., MH12DE5678)
+        - 9 chars:  LL NN L NNNN  (e.g., KA03M1234)
+        - 8 chars:  LL N L NNNN   (e.g., DL3C1234)
         """
         if not text:
             return ""
@@ -149,32 +156,68 @@ class LicensePlateOCR:
         # Remove special characters, punctuation, and spaces
         cleaned = re.sub(r'[^A-Za-z0-9]', '', text).upper()
         
-        # Apply heuristics for common OCR errors based on Indian plate structure (State code + district + letters + numbers)
-        # e.g., MH12AB1234: Length is usually 10.
-        # If letters are in number positions, replace them (e.g. 'O' -> '0', 'I' -> '1', 'S' -> '5', 'Z' -> '2')
-        # If numbers are in letter positions, replace them (e.g. '0' -> 'O', '1' -> 'I')
-        # We can implement basic formatting corrections if the text roughly matches 10 characters.
+        # 10-character Indian plate format (State:2, District:2, Series:2, Number:4)
         if len(cleaned) == 10:
             chars = list(cleaned)
-            # Positions 0, 1 should be state code (letters)
+            # Positions 0, 1: State code (letters)
             for i in [0, 1]:
                 if chars[i] == '0': chars[i] = 'O'
                 if chars[i] == '1': chars[i] = 'I'
-            # Positions 2, 3 should be district code (numbers)
+                if chars[i] == '8': chars[i] = 'B'
+            # Positions 2, 3: District code (digits)
             for i in [2, 3]:
                 if chars[i] == 'O': chars[i] = '0'
                 if chars[i] == 'I': chars[i] = '1'
                 if chars[i] == 'S': chars[i] = '5'
-            # Positions 4, 5 should be unique letters
+                if chars[i] == 'Z': chars[i] = '2'
+                if chars[i] == 'B': chars[i] = '8'
+            # Positions 4, 5: Series letters
             for i in [4, 5]:
                 if chars[i] == '0': chars[i] = 'O'
                 if chars[i] == '1': chars[i] = 'I'
-            # Positions 6, 7, 8, 9 should be numbers
+                if chars[i] == '8': chars[i] = 'B'
+            # Positions 6, 7, 8, 9: Digits
             for i in range(6, 10):
                 if chars[i] == 'O': chars[i] = '0'
                 if chars[i] == 'I': chars[i] = '1'
                 if chars[i] == 'S': chars[i] = '5'
                 if chars[i] == 'Z': chars[i] = '2'
+                if chars[i] == 'B': chars[i] = '8'
+                if chars[i] == 'G': chars[i] = '6'
+            cleaned = "".join(chars)
+            
+        # 9-character format (State:2, District:2, Series:1, Number:4)
+        elif len(cleaned) == 9:
+            chars = list(cleaned)
+            for i in [0, 1]:
+                if chars[i] == '0': chars[i] = 'O'
+                if chars[i] == '1': chars[i] = 'I'
+            for i in [2, 3]:
+                if chars[i] == 'O': chars[i] = '0'
+                if chars[i] == 'I': chars[i] = '1'
+                if chars[i] == 'S': chars[i] = '5'
+            if chars[4] == '0': chars[4] = 'O'
+            if chars[4] == '1': chars[4] = 'I'
+            for i in range(5, 9):
+                if chars[i] == 'O': chars[i] = '0'
+                if chars[i] == 'I': chars[i] = '1'
+                if chars[i] == 'S': chars[i] = '5'
+                if chars[i] == 'Z': chars[i] = '2'
+            cleaned = "".join(chars)
+            
+        # 8-character format (State:2, District:1, Series:1, Number:4) e.g., DL3C1234
+        elif len(cleaned) == 8:
+            chars = list(cleaned)
+            for i in [0, 1]:
+                if chars[i] == '0': chars[i] = 'O'
+                if chars[i] == '1': chars[i] = 'I'
+            if chars[2] in ['O', 'I', 'S']:
+                chars[2] = {'O': '0', 'I': '1', 'S': '5'}[chars[2]]
+            if chars[3] in ['0', '1']:
+                chars[3] = {'0': 'O', '1': 'I'}[chars[3]]
+            for i in range(4, 8):
+                if chars[i] in ['O', 'I', 'S', 'Z']:
+                    chars[i] = {'O': '0', 'I': '1', 'S': '5', 'Z': '2'}[chars[i]]
             cleaned = "".join(chars)
             
         return cleaned
@@ -279,28 +322,51 @@ class LicensePlateOCR:
         # Decide engine
         engine = engine or self.default_engine
         
-        raw_text = ""
-        confidence = 0.0
-        
-        if engine == "tesseract":
-            if _tesseract_available:
-                raw_text, confidence = self.run_tesseract(preprocessed)
+        plate_regex = self.ocr_config.get("plate_regex", r"^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}$")
+
+        def evaluate_candidate(cand_img, eng):
+            if eng == "tesseract" and _tesseract_available:
+                raw, conf = self.run_tesseract(cand_img)
             else:
-                print("[OCR] Tesseract selected but not available. Falling back to EasyOCR.")
-                raw_text, confidence = self.run_easyocr(preprocessed)
-                engine = "easyocr"
-        else:
-            raw_text, confidence = self.run_easyocr(preprocessed)
-            engine = "easyocr"
-            
-        cleaned_text = self.clean_plate_text(raw_text)
+                raw, conf = self.run_easyocr(cand_img)
+            clean = self.clean_plate_text(raw)
+            # Regex match bonus (gives +1.0 boost if clean matches Indian plate pattern)
+            is_valid_format = bool(re.match(plate_regex, clean))
+            score = conf + (1.0 if is_valid_format else 0.0) + (0.3 if len(clean) in [8, 9, 10] else 0.0)
+            return {
+                "raw_text": raw,
+                "cleaned_text": clean,
+                "confidence": conf,
+                "score": score,
+                "is_valid": is_valid_format,
+                "img": cand_img
+            }
+
+        # Multi-Pass OCR evaluation across preprocessed, contrast-enhanced, and grayscale variants
+        candidates = []
+        candidates.append(evaluate_candidate(preprocessed, engine))
         
+        if preprocess:
+            gray_enhanced = cv2.cvtColor(enhanced_img, cv2.COLOR_BGR2GRAY) if len(enhanced_img.shape) == 3 else enhanced_img
+            candidates.append(evaluate_candidate(gray_enhanced, engine))
+            candidates.append(evaluate_candidate(enhanced_img, engine))
+
+        # Pick best scoring candidate
+        best_candidate = max(candidates, key=lambda c: c["score"])
+        
+        raw_text = best_candidate["raw_text"]
+        cleaned_text = best_candidate["cleaned_text"]
+        confidence = best_candidate["confidence"]
+        
+        # If tesseract wasn't available, actual engine used is easyocr
+        actual_engine = "easyocr" if (engine == "tesseract" and not _tesseract_available) else engine
+
         return {
             "raw_text": raw_text,
             "cleaned_text": cleaned_text,
             "confidence": confidence,
-            "engine_used": engine,
-            "preprocessed_img": preprocessed,
+            "engine_used": actual_engine,
+            "preprocessed_img": best_candidate["img"],
             "enhanced_img": enhanced_img,
             "was_low_light": was_low_light,
             "enhancer_stages": enhancer_stages

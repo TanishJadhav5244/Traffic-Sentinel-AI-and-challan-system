@@ -10,19 +10,22 @@ from backend.rto_helper import query_rto
 from backend.challan_generator import generate_challan_ticket
 
 class ViolationDatabase:
-    def __init__(self, csv_log_path="violations/violations_log.csv", crop_dir="violations/crops"):
+    def __init__(self, csv_log_path="violations/violations_log.csv", crop_dir="violations/crops", config=None):
         self.csv_log_path = csv_log_path
         self.crop_dir = crop_dir
+        self.config = config or {}
         self._initialize_storage()
 
     def _initialize_storage(self):
         """Creates output directories and CSV file if they don't exist."""
         os.makedirs(self.crop_dir, exist_ok=True)
-        os.makedirs(os.path.dirname(self.csv_log_path), exist_ok=True)
+        csv_dir = os.path.dirname(self.csv_log_path)
+        if csv_dir:
+            os.makedirs(csv_dir, exist_ok=True)
         
         self.headers = [
             "violation_id", "timestamp", "plate_text", "ocr_confidence", "helmet_status", 
-            "plate_crop_path", "rider_crop_path", "owner_name", "vehicle_model", "challan_amount", "challan_path", "night_mode"
+            "plate_crop_path", "rider_crop_path", "owner_name", "vehicle_model", "challan_amount", "challan_path", "night_mode", "status"
         ]
         
         # If CSV log does not exist, create it with headers
@@ -51,6 +54,8 @@ class ViolationDatabase:
                                 df[col] = "Unknown Model"
                             elif col == "night_mode":
                                 df[col] = False
+                            elif col == "status":
+                                df[col] = "Pending"
                             else:
                                 df[col] = ""
                     # Reorder and write back
@@ -69,7 +74,7 @@ class ViolationDatabase:
         timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # Query RTO vehicle details
-        rto_info = query_rto(plate_text)
+        rto_info = query_rto(plate_text, config=self.config)
         owner_name = rto_info.get("owner_name", "Unknown Owner")
         vehicle_model = rto_info.get("vehicle_model", "Unknown Model")
         challan_amount = 1000.0
@@ -119,7 +124,8 @@ class ViolationDatabase:
             "vehicle_model": vehicle_model,
             "challan_amount": challan_amount,
             "challan_path": challan_path,
-            "night_mode": night_mode
+            "night_mode": night_mode,
+            "status": "Pending"
         }
         
         with open(self.csv_log_path, mode='a', newline='', encoding='utf-8') as f:
@@ -133,9 +139,30 @@ class ViolationDatabase:
         if not os.path.exists(self.csv_log_path):
             return pd.DataFrame()
         try:
-            return pd.read_csv(self.csv_log_path)
+            df = pd.read_csv(self.csv_log_path)
+            if "status" not in df.columns:
+                df["status"] = "Pending"
+            return df
         except Exception:
             return pd.DataFrame()
+
+    def update_violation_status(self, violation_id: str, new_status: str) -> bool:
+        """Updates the status of a specific violation record (e.g., Pending, Paid, Disputed)."""
+        if not os.path.exists(self.csv_log_path):
+            return False
+        try:
+            df = pd.read_csv(self.csv_log_path)
+            if "violation_id" not in df.columns or "status" not in df.columns:
+                return False
+            mask = df["violation_id"].astype(str) == str(violation_id)
+            if mask.any():
+                df.loc[mask, "status"] = new_status
+                df.to_csv(self.csv_log_path, index=False, encoding='utf-8')
+                return True
+            return False
+        except Exception as e:
+            print(f"[DB] Error updating violation status: {e}")
+            return False
 
     def clear_database(self):
         """Clears all records and deletes stored crop images and challans."""
@@ -261,3 +288,107 @@ class ViolationDatabase:
             result["top_plates"] = tp
 
         return result
+
+    def get_violations_paginated(self, page=1, page_size=20, search_query=None, status_filter=None):
+        """Returns paginated list of violation records with optional filtering."""
+        df = self.get_all_violations()
+        if df.empty:
+            return [], 0
+
+        if search_query:
+            sq = str(search_query).strip().lower()
+            df = df[df["plate_text"].astype(str).str.lower().str.contains(sq, na=False)]
+
+        if status_filter:
+            sf = str(status_filter).strip().upper()
+            df = df[df["status"].astype(str).str.upper() == sf]
+
+        total_count = len(df)
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+
+        records = df.iloc[start_idx:end_idx].to_dict(orient="records")
+        return records, total_count
+
+    def get_violation_by_id(self, violation_id):
+        """Finds a single violation record by violation_id."""
+        df = self.get_all_violations()
+        if df.empty:
+            return None
+        match = df[df["violation_id"].astype(str) == str(violation_id)]
+        if match.empty:
+            return None
+        return match.iloc[0].to_dict()
+
+    def get_summary_stats(self):
+        """Returns aggregate metrics summary."""
+        df = self.get_all_violations()
+        if df.empty:
+            return {"total_violations": 0, "total_fines_inr": 0, "pending": 0, "paid": 0}
+        
+        total = len(df)
+        fines = float(df.get("challan_amount", pd.Series([1000]*total)).sum())
+        statuses = df.get("status", pd.Series(["PENDING"]*total)).astype(str).str.upper()
+        pending = int((statuses == "PENDING").sum())
+        paid = int((statuses == "PAID").sum())
+
+        return {
+            "total_violations": total,
+            "total_fines_inr": fines,
+            "pending": pending,
+            "paid": paid
+        }
+
+    def get_hourly_analytics(self):
+        """Returns hourly distribution dict."""
+        analytics = self.get_analytics_data()
+        df_hourly = analytics.get("hourly_series", pd.DataFrame())
+        if df_hourly.empty:
+            return []
+        return df_hourly.to_dict(orient="records")
+
+    def get_manufacturer_stats(self):
+        """Returns manufacturer counts dict."""
+        analytics = self.get_analytics_data()
+        df_mfg = analytics.get("manufacturer_counts", pd.DataFrame())
+        if df_mfg.empty:
+            return []
+        return df_mfg.to_dict(orient="records")
+
+    def save_violation_crops(self, head_crop, plate_crop, full_frame, plate_text):
+        """Saves head crop, plate crop, and full frame image to storage directory."""
+        os.makedirs(self.crop_dir, exist_ok=True)
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        clean_text = re.sub(r'[^A-Z0-9]', '', str(plate_text).upper()) or "PLATE"
+
+        head_path = os.path.join(self.crop_dir, f"rider_{clean_text}_{stamp}.jpg")
+        plate_path = os.path.join(self.crop_dir, f"plate_{clean_text}_{stamp}.jpg")
+        frame_path = os.path.join(self.crop_dir, f"frame_{clean_text}_{stamp}.jpg")
+
+        if head_crop is not None and head_crop.size > 0:
+            cv2.imwrite(head_path, head_crop)
+        if plate_crop is not None and plate_crop.size > 0:
+            cv2.imwrite(plate_path, plate_crop)
+        if full_frame is not None and full_frame.size > 0:
+            cv2.imwrite(frame_path, full_frame)
+
+        return {
+            "head_crop": head_path,
+            "plate_crop": plate_path,
+            "full_frame": frame_path
+        }
+
+    def insert_violation(self, plate_number, confidence, owner_name, location, challan_id, challan_path, head_crop_path, plate_crop_path, full_frame_path):
+        """Wrapper method around add_violation to match API payload parameters."""
+        return self.add_violation(
+            plate_text=plate_number,
+            ocr_confidence=confidence,
+            helmet_status="No-Helmet",
+            plate_crop_path=plate_crop_path or "",
+            rider_crop_path=head_crop_path or "",
+            owner_name=owner_name or "Unknown",
+            vehicle_model="Motorcycle",
+            challan_amount=1000.0,
+            challan_path=challan_path or "",
+            night_mode=False
+        )
