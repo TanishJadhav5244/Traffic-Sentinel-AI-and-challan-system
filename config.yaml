@@ -55,7 +55,58 @@ rto:
   # Timeout in seconds for HTTP requests
   timeout_seconds: 5.0
   # Opt-in demo fallback mode: if true, uses explicit labeled mock data when API key is missing
-  demo_fallback: false
+  demo_fallback: true
+
+# Notification configurations
+notifications:
+  # Notification dispatch log file
+  log_file: "violations/notification_log.json"
+
+  # Email (SMTP) configuration
+  email:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    sender_email: "sentinel-alerts@traffic-sentinel.ai"
+    # App password (for Gmail, generate at https://myaccount.google.com/apppasswords)
+    sender_password: ""
+
+  # SMS Gateway configuration
+  sms:
+    # Provider: "demo" (default), "twilio", or "fast2sms"
+    provider: "demo"
+    # Log file for demo SMS gateway
+    sms_log_file: "violations/sms_log.json"
+
+    # Twilio credentials (only if provider is "twilio")
+    account_sid: ""
+    auth_token: ""
+    from_number: ""
+
+    # Fast2SMS credentials (only if provider is "fast2sms")
+    api_key: ""
+    sender_id: "TRFSNT"
+    route: "dlt"
+
+# Payment Gateway configuration
+payment:
+  # Provider: "demo" (default) or "razorpay"
+  provider: "demo"
+  
+  # Default fine amount for helmet violations (INR)
+  fine_amount: 1000
+  
+  # Razorpay credentials (only if provider is "razorpay")
+  razorpay_key_id: ""
+  razorpay_key_secret: ""
+  
+  # Payment receipt output directory
+  receipt_dir: "violations/challans"
+
+# Challan settings
+challan:
+  fine_amount: 1000
+  payment_deadline_days: 15
 
 # Demo settings
 demo:

@@ -100,75 +100,85 @@ render_gov_header()
 _violation_df = db.get_all_violations()
 render_hero(violation_count=len(_violation_df))
 
-# Sidebar Configuration
+# ── Sidebar ──────────────────────────────────────────────
+# System status at the top so the user sees it immediately
 st.sidebar.markdown(
-    '<div style="text-align:center;padding:0.5rem 0 1rem;">'
-    '<img src="https://img.icons8.com/nolan/128/security-camera.png" width="72" '
-    'style="filter:drop-shadow(0 0 12px rgba(245,158,11,0.4));"/>'
+    '<div class="sidebar-status sidebar-status-live">'
+    '● System Active'
     '</div>',
     unsafe_allow_html=True,
 )
-st.sidebar.markdown("### ⚙️ System Configuration")
 
-# Engine selection
+st.sidebar.markdown("### Settings")
+
+# ── OCR Engine ──
 ocr_selection = st.sidebar.selectbox(
-    "OCR Engine",
+    "Text Recognition Engine",
     options=["easyocr", "tesseract"],
-    index=0 if config.get("ocr", {}).get("default_engine") == "easyocr" else 1
+    index=0 if config.get("ocr", {}).get("default_engine") == "easyocr" else 1,
+    help="EasyOCR is more accurate for most plates. Tesseract is faster but less reliable.",
 )
 
-# Threshold sliders
-st.sidebar.subheader("Detection Thresholds")
-rider_conf = st.sidebar.slider("Rider Bounding Box Conf", 0.10, 1.00, float(config.get("models", {}).get("confidence", {}).get("rider", 0.35)))
-helmet_conf = st.sidebar.slider("Helmet Conf", 0.10, 1.00, float(config.get("models", {}).get("confidence", {}).get("helmet", 0.40)))
-plate_conf = st.sidebar.slider("License Plate Conf", 0.10, 1.00, float(config.get("models", {}).get("confidence", {}).get("license_plate", 0.40)))
+# ── Detection Sensitivity (collapsible — advanced) ──
+with st.sidebar.expander("Detection Sensitivity", expanded=False):
+    st.caption("Adjust how strictly the AI detects objects. "
+               "Lower values catch more but may include false positives.")
+    rider_conf = st.slider(
+        "Rider detection",
+        0.10, 1.00,
+        float(config.get("models", {}).get("confidence", {}).get("rider", 0.35)),
+        key="slider_rider",
+        help="Minimum confidence to detect a two-wheeler rider.",
+    )
+    helmet_conf = st.slider(
+        "Helmet detection",
+        0.10, 1.00,
+        float(config.get("models", {}).get("confidence", {}).get("helmet", 0.40)),
+        key="slider_helmet",
+        help="Minimum confidence to classify helmet / no-helmet.",
+    )
+    plate_conf = st.slider(
+        "Number plate detection",
+        0.10, 1.00,
+        float(config.get("models", {}).get("confidence", {}).get("license_plate", 0.40)),
+        key="slider_plate",
+        help="Minimum confidence to detect a license plate region.",
+    )
 
 # Set runtime settings back into classes
 detector.thresholds["rider"] = rider_conf
 detector.thresholds["helmet"] = helmet_conf
 detector.thresholds["license_plate"] = plate_conf
 
-# Low-light / Night mode controls
-st.sidebar.subheader("🌙 Low-Light & Night Vision")
-enable_enhancer = st.sidebar.checkbox(
-    "Auto Low-Light Enhancement",
-    value=bool(config.get("ocr", {}).get("enhancer", {}).get("auto_low_light", True)),
-    help="Detects dark plate crops and automatically applies Retinex, CLAHE, and Denoising."
-)
-force_enhancer = st.sidebar.checkbox(
-    "Force Night-Vision Filter",
-    value=bool(config.get("ocr", {}).get("enhancer", {}).get("force_enhancement", False)),
-    help="Forces multi-stage illumination boost on all cropped plates regardless of brightness."
-)
+# ── Night / Low-Light Mode (collapsible) ──
+with st.sidebar.expander("Low-Light / Night Mode", expanded=False):
+    st.caption("Enhance dark or night-time footage for better plate reading.")
+    enable_enhancer = st.checkbox(
+        "Auto-enhance dark images",
+        value=bool(config.get("ocr", {}).get("enhancer", {}).get("auto_low_light", True)),
+        help="Automatically brightens dark plate crops before reading text.",
+    )
+    force_enhancer = st.checkbox(
+        "Always apply night filter",
+        value=bool(config.get("ocr", {}).get("enhancer", {}).get("force_enhancement", False)),
+        help="Force brightness enhancement on every plate, even well-lit ones.",
+    )
 ocr_engine.enhancer_settings["auto_low_light"] = enable_enhancer
 ocr_engine.enhancer_settings["force_enhancement"] = force_enhancer
 
-# Sidebar Quick Actions
+# ── Quick Actions ──
 st.sidebar.markdown("---")
-st.sidebar.subheader("🛠️ Quick Actions")
 sb_col1, sb_col2 = st.sidebar.columns(2)
 with sb_col1:
     if st.button("🔄 Refresh", key="sb_btn_refresh", use_container_width=True, type="secondary"):
         st.cache_resource.clear()
         st.rerun()
 with sb_col2:
-    if st.button("⚡ Reset", key="sb_btn_reset", use_container_width=True, type="secondary"):
+    if st.button("🗑️ Reset", key="sb_btn_reset", use_container_width=True, type="secondary"):
         for k in list(st.session_state.keys()):
             del st.session_state[k]
         st.rerun()
 
-# Mode status display
-st.sidebar.markdown(
-    '<div class="sidebar-status sidebar-status-live">'
-    '🚀 Live — YOLOv8 AI Surveillance Grid Active'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
-# Hardware Telemetry
-st.sidebar.markdown("---")
-st.sidebar.subheader("⚡ Live System Telemetry")
-render_telemetry_badge(detector_ms=14.2, ocr_ms=38.6, fps=28.4)
 
 # Tab setup
 tab_detector, tab_database, tab_ocr_playground, tab_rto, tab_analytics, tab_rest_api = st.tabs([
@@ -960,6 +970,10 @@ with tab_rto:
                             <div class="rc-value">{rto_info.get('vehicle_model', 'N/A')}</div>
                         </div>
                         <div class="rc-field">
+                            <div class="rc-label">RTO District Office</div>
+                            <div class="rc-value" style="color: #f59e0b; font-weight: 600;">{rto_info.get('rto_office', 'N/A')}</div>
+                        </div>
+                        <div class="rc-field">
                             <div class="rc-label">Fuel Type</div>
                             <div class="rc-value">{rto_info.get('fuel_type', 'N/A')}</div>
                         </div>
@@ -973,13 +987,9 @@ with tab_rto:
                                 <span class="rc-badge {ins_badge}">{ins_label}</span>
                             </div>
                         </div>
-                        <div class="rc-field">
-                            <div class="rc-label">Fitness Validity</div>
-                            <div class="rc-value">Valid upto 15 Years from Reg.</div>
-                        </div>
                     </div>
                     <div style="margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 10px; font-size: 0.65rem; color: #64748b; text-align: center;">
-                        Chip Serial: MoRTH-CS-{abs(hash(clean_plate_no)) % 100000000:08d} | Digital Authenticity Verified
+                        Database Source: {rto_info.get('api_source', 'RTO Parivahan Vahan Registry')} | Chip Serial: MoRTH-CS-{abs(hash(clean_plate_no)) % 100000000:08d}
                     </div>
                 </div>
                 """, unsafe_allow_html=True)

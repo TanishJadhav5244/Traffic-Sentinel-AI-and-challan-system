@@ -1,184 +1,158 @@
 import os
-import cv2
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-from ultralytics import YOLO
+import sys
+import urllib.request
+import urllib.error
 
-def download_yolo_weights():
-    """Forces Ultralytics to download yolov8n.pt weights."""
-    print("[Setup] Fetching YOLOv8 weights...")
+# ──────────────────────────────────────────────────────────────────────────────
+# Model paths
+# ──────────────────────────────────────────────────────────────────────────────
+MODELS_DIR = "models"
+PLATE_WEIGHTS_PATH = os.path.join(MODELS_DIR, "plate_detector.pt")
+HELMET_WEIGHTS_PATH = os.path.join(MODELS_DIR, "helmet_detector.pt")
+
+# Combined model path (checked first — used if you supply your own trained weights)
+COMBINED_WEIGHTS_PATH = os.path.join(MODELS_DIR, "best_detector.pt")
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Public model URLs (no auth required)
+#
+# License Plate detector — keremberke/license-plate-detection
+# Mirrored via GitHub Releases (avoids HuggingFace login requirement)
+# yolov8n fine-tuned on CCPD + OpenImages, class: {0: 'license-plate'}
+# ──────────────────────────────────────────────────────────────────────────────
+PLATE_MODEL_URL = (
+    "https://github.com/keremberke/awesome-yolov8-models/releases/download/v1.0.0/license-plate-detection-best.pt"
+)
+
+# Helmet detector
+# yolov8n fine-tuned on helmet dataset, classes include helmet / no-helmet / person
+HELMET_MODEL_URL = (
+    "https://github.com/keremberke/awesome-yolov8-models/releases/download/v1.0.0/helmet-detection-best.pt"
+)
+
+# Fallback: if both specialty models fail, use generic yolov8n (COCO)
+FALLBACK_YOLO_URL = (
+    "https://github.com/ultralytics/assets/releases/download/v8.1.0/yolov8n.pt"
+)
+
+
+def _download_file(url: str, dest_path: str, label: str = "Model") -> bool:
+    """Downloads a file from a URL and saves it locally. Returns True on success."""
+    print(f"[Model Loader] Downloading {label} from:\n  {url}")
     try:
-        model = YOLO("yolov8n.pt")
-        print("[Setup] yolov8n.pt downloaded successfully.")
-    except Exception as e:
-        print(f"[Setup] Error downloading YOLO weights: {e}")
-
-def create_synthetic_plate(text, filename, blur=False, skew=False, noise=False):
-    """
-    Creates a synthetic Indian license plate image using OpenCV and PIL.
-    """
-    # Standard dimensions: 340x80 pixels (typical plate ratio)
-    width, height = 340, 80
-    
-    # Create white background image
-    img = np.ones((height, width, 3), dtype=np.uint8) * 255
-    
-    # Draw border
-    cv2.rectangle(img, (2, 2), (width-3, height-3), (0, 0, 0), 2)
-    cv2.rectangle(img, (5, 5), (width-6, height-6), (0, 0, 0), 1)
-    
-    # Convert to PIL to draw clean text
-    pil_img = Image.fromarray(img)
-    draw = ImageDraw.Draw(pil_img)
-    
-    # Try to load a nice font, otherwise fallback to default
-    font = None
-    font_paths = [
-        "C:\\Windows\\Fonts\\arialbd.ttf",  # Windows Arial Bold
-        "C:\\Windows\\Fonts\\consolab.ttf", # Windows Consolas Bold
-        "C:\\Windows\\Fonts\\tahomabd.ttf"  # Windows Tahoma Bold
-    ]
-    for fp in font_paths:
-        if os.path.exists(fp):
-            try:
-                font = ImageFont.truetype(fp, 44)
-                break
-            except Exception:
-                continue
-                
-    if font is None:
-        font = ImageFont.load_default()
-        
-    # Calculate text size using textbbox to center it
-    text_str = f" {text[0:2]} {text[2:4]} {text[4:6]} {text[6:]} "
-    bbox = draw.textbbox((0, 0), text_str, font=font)
-    text_w = bbox[2] - bbox[0]
-    text_h = bbox[3] - bbox[1]
-    
-    tx = (width - text_w) // 2
-    ty = (height - text_h) // 2 - 5  # Adjust slight vertical offset
-    
-    draw.text((tx, ty), text_str, fill=(0, 0, 0), font=font)
-    
-    # Convert back to OpenCV BGR
-    img = np.array(pil_img)
-    
-    # Apply modifications
-    if blur:
-        # Gaussian Blur
-        img = cv2.GaussianBlur(img, (7, 7), 0)
-        
-    if noise:
-        # Add salt-and-pepper noise
-        row, col, ch = img.shape
-        mean = 0
-        var = 0.1
-        sigma = var**0.5
-        gauss = np.random.normal(mean, sigma, (row, col, ch))
-        gauss = gauss.reshape(row, col, ch)
-        noisy = img + gauss * 50
-        img = np.clip(noisy, 0, 255).astype(np.uint8)
-        
-    if skew:
-        # Rotate image slightly (e.g., 6 degrees)
-        angle = 6.0
-        center = (width // 2, height // 2)
-        M = cv2.getRotationMatrix2D(center, angle, 1.0)
-        img = cv2.warpAffine(img, M, (width, height), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
-        
-    # Save image
-    cv2.imwrite(filename, img)
-    print(f"[Setup] Created synthetic plate: {filename}")
-
-def create_synthetic_traffic_scene(filename):
-    """
-    Creates a simulated traffic image.
-    Contains a background road, a drawn motorcycle shape, a rider with head, and a plate.
-    This serves as a mock input image to test the detection pipeline.
-    """
-    width, height = 640, 480
-    
-    # Draw a simple background: gray road, green grass, blue sky
-    img = np.zeros((height, width, 3), dtype=np.uint8)
-    img[0:150, :] = [235, 206, 135] # Sky (BGR: light blue)
-    img[150:280, :] = [100, 180, 100] # Grass (BGR: green)
-    img[280:, :] = [80, 80, 80]     # Road (BGR: gray)
-    
-    # Draw road lanes (yellow dashed line)
-    cv2.line(img, (width//2, 320), (width//2, 340), (0, 255, 255), 3)
-    cv2.line(img, (width//2, 380), (width//2, 410), (0, 255, 255), 3)
-    cv2.line(img, (width//2, 450), (width//2, 480), (0, 255, 255), 3)
-    
-    # Draw a simulated rider on a motorcycle (coordinates around center)
-    # 1. Motorcycle wheels and frame
-    cv2.circle(img, (280, 390), 30, (0, 0, 0), -1) # Front wheel
-    cv2.circle(img, (280, 390), 15, (128, 128, 128), -1)
-    cv2.circle(img, (360, 390), 30, (0, 0, 0), -1) # Back wheel
-    cv2.circle(img, (360, 390), 15, (128, 128, 128), -1)
-    
-    # Frame body
-    cv2.line(img, (280, 390), (320, 330), (0, 0, 255), 8) # Front fork
-    cv2.line(img, (360, 390), (320, 330), (0, 0, 255), 8) # Rear frame
-    cv2.rectangle(img, (295, 325), (345, 355), (0, 0, 180), -1) # Fuel tank
-    
-    # 2. Rider body (person)
-    cv2.rectangle(img, (310, 230), (340, 325), (50, 50, 50), -1) # Torso (dark jacket)
-    cv2.line(img, (310, 230), (290, 290), (50, 50, 50), 6) # Arm reaching handlebar
-    cv2.circle(img, (285, 290), 8, (200, 150, 120), -1) # Hand
-    
-    # 3. Rider head (no-helmet: just skin colored circle + black hair)
-    cv2.circle(img, (325, 200), 20, (200, 150, 120), -1) # Face/head
-    # Draw hair
-    cv2.ellipse(img, (325, 192), (18, 12), 0, 180, 360, (0, 0, 0), -1)
-    
-    # 4. License Plate at the rear of the motorcycle
-    # We will embed a tiny version of our license plate image at (350, 360) to (390, 380)
-    # Let's draw a white plate rectangle and write MH12DE5678 in small font
-    plate_x, plate_y = 350, 365
-    plate_w, plate_h = 75, 22
-    cv2.rectangle(img, (plate_x, plate_y), (plate_x + plate_w, plate_y + plate_h), (255, 255, 255), -1)
-    cv2.rectangle(img, (plate_x, plate_y), (plate_x + plate_w, plate_y + plate_h), (0, 0, 0), 1)
-    cv2.putText(img, "MH12DE5678", (plate_x + 3, plate_y + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 0), 1, cv2.LINE_AA)
-    
-    cv2.imwrite(filename, img)
-    print(f"[Setup] Created synthetic traffic scene: {filename}")
-
-def download_sample_video():
-    """Downloads a sample traffic video from the web if it doesn't exist."""
-    video_url = "https://raw.githubusercontent.com/intel-iot-devkit/sample-videos/master/person-bicycle-car-detection.mp4"
-    dest_path = "test_assets/traffic_video_sample.mp4"
-    
-    if os.path.exists(dest_path):
-        print(f"[Setup] Sample video already exists at {dest_path}")
-        return
-        
-    print("[Setup] Downloading sample traffic video from Intel IoT Devkit...")
-    try:
-        import urllib.request
         req = urllib.request.Request(
-            video_url, 
-            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            url,
+            headers={
+                "User-Agent": "TrafficSentinelAI/2.0",
+                "Accept": "application/octet-stream",
+            },
         )
-        with urllib.request.urlopen(req) as response, open(dest_path, 'wb') as out_file:
-            out_file.write(response.read())
-        print(f"[Setup] Sample video downloaded successfully to {dest_path}")
+        with urllib.request.urlopen(req, timeout=90) as response, \
+                open(dest_path, "wb") as out_file:
+            total = int(response.headers.get("Content-Length", 0))
+            downloaded = 0
+            chunk = 1 << 20  # 1 MB chunks
+            while True:
+                block = response.read(chunk)
+                if not block:
+                    break
+                out_file.write(block)
+                downloaded += len(block)
+                if total > 0:
+                    pct = downloaded / total * 100
+                    sys.stdout.write(f"\r  Progress: {pct:.1f}%  ({downloaded // 1024} KB)")
+                    sys.stdout.flush()
+        print(f"\n[Model Loader] {label} saved to {dest_path}")
+        return True
     except Exception as e:
-        print(f"[Setup] Failed to download sample video: {e}")
+        msg = str(e).encode('ascii', errors='replace').decode('ascii')
+        print(f"\n[Model Loader] Download failed for {label}: {msg}")
+        if os.path.exists(dest_path):
+            os.remove(dest_path)  # clean up partial download
+        return False
+
+
+def _is_valid_model(path: str, min_bytes: int = 100_000) -> bool:
+    """Returns True if the model file exists and is larger than the minimum size threshold."""
+    return os.path.exists(path) and os.path.getsize(path) > min_bytes
+
+
+def download_all_models(force: bool = False) -> dict:
+    """
+    Downloads the license-plate detector and helmet detector models.
+
+    Returns a dict with paths:
+        {
+            "plate_detector":  str | None,
+            "helmet_detector": str | None,
+            "combined":        str | None,   # Only set if user supplied best_detector.pt
+        }
+    """
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    result = {"plate_detector": None, "helmet_detector": None, "combined": None}
+
+    # ── Combined model (user-supplied or previously trained) ────────────────
+    if _is_valid_model(COMBINED_WEIGHTS_PATH):
+        print(f"[Model Loader] Combined custom weights present: {COMBINED_WEIGHTS_PATH}")
+        result["combined"] = COMBINED_WEIGHTS_PATH
+        return result  # nothing else needed — detector.py will use this
+
+    # ── License-plate detector ───────────────────────────────────────────────
+    if _is_valid_model(PLATE_WEIGHTS_PATH) and not force:
+        print(f"[Model Loader] Plate detector present: {PLATE_WEIGHTS_PATH}")
+        result["plate_detector"] = PLATE_WEIGHTS_PATH
+    else:
+        ok = _download_file(PLATE_MODEL_URL, PLATE_WEIGHTS_PATH, "License-Plate Detector (yolov8n)")
+        if ok and _is_valid_model(PLATE_WEIGHTS_PATH):
+            result["plate_detector"] = PLATE_WEIGHTS_PATH
+
+    # ── Helmet/Rider detector ────────────────────────────────────────────────
+    if _is_valid_model(HELMET_WEIGHTS_PATH) and not force:
+        print(f"[Model Loader] Helmet detector present: {HELMET_WEIGHTS_PATH}")
+        result["helmet_detector"] = HELMET_WEIGHTS_PATH
+    else:
+        ok = _download_file(HELMET_MODEL_URL, HELMET_WEIGHTS_PATH, "Helmet Detector (yolov8n)")
+        if ok and _is_valid_model(HELMET_WEIGHTS_PATH):
+            result["helmet_detector"] = HELMET_WEIGHTS_PATH
+
+    # ── Fallback: download generic yolov8n if specialty models fail ──────────
+    if not result["plate_detector"] and not result["helmet_detector"]:
+        fallback_path = os.path.join(MODELS_DIR, "yolov8n_coco.pt")
+        if not _is_valid_model(fallback_path):
+            _download_file(FALLBACK_YOLO_URL, fallback_path, "YOLOv8n COCO (fallback)")
+        print(
+            "[Model Loader] WARNING: Only COCO fallback is available.\n"
+            "  Helmet and license plate detection will use heuristic/contour methods.\n"
+            "  For best results, place a trained best_detector.pt in the models/ folder."
+        )
+
+    return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Legacy compat shim — called from the old "Generate Sample Assets" button
+# ──────────────────────────────────────────────────────────────────────────────
+def download_weights_if_missing(
+    model_path: str = COMBINED_WEIGHTS_PATH,
+    url: str = PLATE_MODEL_URL,
+) -> str:
+    """
+    Backwards-compatible entry point.  Downloads all specialist models.
+    Returns the path to the best available model.
+    """
+    result = download_all_models()
+    # Return whatever is available, priority: combined > helmet > plate
+    return (
+        result.get("combined")
+        or result.get("helmet_detector")
+        or result.get("plate_detector")
+        or "yolov8n.pt"
+    )
+
 
 if __name__ == "__main__":
-    os.makedirs("test_assets", exist_ok=True)
-    download_yolo_weights()
-    
-    # Create different types of plates to demonstrate preprocessing benefits
-    create_synthetic_plate("MH12AB1234", "test_assets/plate_clean.png", blur=False, skew=False)
-    create_synthetic_plate("DL3CAY1111", "test_assets/plate_blurry.png", blur=True, skew=False)
-    create_synthetic_plate("KA03MG9999", "test_assets/plate_skewed.png", blur=False, skew=True)
-    create_synthetic_plate("HR26BP0007", "test_assets/plate_noisy.png", blur=False, skew=False, noise=True)
-    
-    # Create sample traffic image
-    create_synthetic_traffic_scene("test_assets/traffic_sample.png")
-    
-    # Download sample traffic video for video processing tab
-    download_sample_video()
-    
-    print("[Setup] Asset configuration completed successfully!")
+    paths = download_all_models(force="--force" in sys.argv)
+    print("\n[Model Loader] Summary:")
+    for k, v in paths.items():
+        print(f"  {k:20s}: {v or 'NOT AVAILABLE'}")
+

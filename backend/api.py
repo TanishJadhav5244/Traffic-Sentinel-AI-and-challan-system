@@ -234,3 +234,13 @@ def get_challan_image(filename: str):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Challan image file not found.")
     return FileResponse(path, media_type="image/png")
+
+@app.post("/api/v1/challan/{challan_id}/pay")
+def pay_challan(challan_id: str, method: str = Query("UPI_ONLINE", description="Payment method")):
+    """Processes digital payment for an E-Challan ticket and generates confirmation receipt."""
+    from backend.challan_payment import EChallanPaymentGateway
+    gateway = EChallanPaymentGateway(db)
+    res = gateway.process_payment(challan_id, payment_method=method)
+    if res.get("status") == "ERROR":
+        raise HTTPException(status_code=404, detail=res.get("message"))
+    return res

@@ -1,8 +1,24 @@
+"""
+backend/notifier.py
+===================
+Unified notification dispatch system for Traffic Sentinel AI.
+Handles automated E-Challan notifications via:
+  - Email (SMTP with HTML templates and image attachments)
+  - SMS (pluggable gateway: Demo, Twilio, Fast2SMS)
+
+Includes delivery tracking, batch dispatch, and notification log.
+"""
+
 import os
+import json
+import datetime
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
+
+from backend.sms_gateway import create_sms_gateway
+
 
 class ChallanNotifier:
     """
@@ -15,7 +31,7 @@ class ChallanNotifier:
         self.enabled = email_cfg.get("enabled", False)
         self.smtp_server = email_cfg.get("smtp_server", "smtp.gmail.com")
         self.smtp_port = email_cfg.get("smtp_port", 587)
-        self.sender_email = email_cfg.get("sender_email", "sentinel-alerts@traffic- sentinel.ai")
+        self.sender_email = email_cfg.get("sender_email", "sentinel-alerts@traffic-sentinel.ai")
         self.sender_password = email_cfg.get("sender_password", "")
         self.sent_log = []
 
@@ -53,7 +69,8 @@ class ChallanNotifier:
             "plate": plate_number,
             "challan_id": challan_id,
             "fine": fine_amount,
-            "status": "SENT"
+            "status": "SENT",
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
 
         if self.enabled and self.sender_password:
@@ -97,8 +114,159 @@ class ChallanNotifier:
             "plate": plate_number,
             "challan_id": challan_id,
             "message": message,
-            "status": "MOCK_SENT"
+            "status": "MOCK_SENT",
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         self.sent_log.append(msg_record)
         print(f"[Notifier] SMS notification dispatched to {phone_number}: {message}")
         return msg_record
+
+
+class NotificationCenter:
+    """
+    Unified notification center combining Email and SMS dispatch
+    with delivery tracking, batch operations, and notification history.
+    """
+
+    def __init__(self, config=None):
+        self.config = config or {}
+        self.email_notifier = ChallanNotifier(config)
+
+        sms_cfg = self.config.get("notifications", {}).get("sms", {})
+        self.sms_gateway = create_sms_gateway(sms_cfg)
+
+        self.notification_log = []
+        self.log_file = self.config.get("notifications", {}).get(
+            "log_file", "violations/notification_log.json"
+        )
+        self._load_log()
+
+    def _load_log(self):
+        """Loads existing notification log from disk."""
+        try:
+            if os.path.exists(self.log_file):
+                with open(self.log_file, "r", encoding="utf-8") as f:
+                    self.notification_log = json.load(f)
+        except Exception:
+            self.notification_log = []
+
+    def _save_log(self):
+        """Persists notification log to disk."""
+        try:
+            os.makedirs(os.path.dirname(self.log_file) or ".", exist_ok=True)
+            with open(self.log_file, "w", encoding="utf-8") as f:
+                json.dump(self.notification_log, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[NotificationCenter] Log save error: {e}")
+
+    def dispatch_challan_notice(self, violation_record, channels=None):
+        """
+        Dispatches E-Challan notice via specified channels (email, sms, or both).
+
+        Args:
+            violation_record (dict): Violation record with plate_text, owner_name, etc.
+            channels (list): List of channels to use. Default: ["email", "sms"].
+
+        Returns:
+            dict: Dispatch result with status for each channel.
+        """
+        channels = channels or ["email", "sms"]
+        plate = violation_record.get("plate_text", "UNKNOWN")
+        owner = violation_record.get("owner_name", "Vehicle Owner")
+        v_id = violation_record.get("violation_id", "N/A")
+        fine = float(violation_record.get("challan_amount", 1000.0))
+        challan_path = violation_record.get("challan_path", "")
+
+        result = {
+            "violation_id": v_id,
+            "plate": plate,
+            "channels": {},
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "overall_status": "DISPATCHED"
+        }
+
+        if "email" in channels:
+            email_addr = f"{plate.lower()}@owner-contact.in"
+            email_result = self.email_notifier.send_email_challan(
+                recipient_email=email_addr,
+                owner_name=owner,
+                plate_number=plate,
+                challan_id=v_id,
+                fine_amount=fine,
+                challan_image_path=challan_path
+            )
+            result["channels"]["email"] = {
+                "recipient": email_addr,
+                "status": email_result.get("status", "UNKNOWN")
+            }
+
+        if "sms" in channels:
+            # Generate a demo phone number from plate hash
+            phone_hash = abs(hash(plate)) % 9000000000 + 1000000000
+            phone = f"+91{phone_hash}"
+            sms_message = (
+                f"Traffic Sentinel: E-Challan #{v_id} issued for {plate}. "
+                f"Fine: INR {fine:.0f}. Pay at echallan.parivahan.gov.in"
+            )
+            sms_result = self.sms_gateway.send(
+                phone_number=phone,
+                message=sms_message,
+                metadata={"challan_id": v_id, "plate": plate}
+            )
+            result["channels"]["sms"] = {
+                "recipient": phone,
+                "status": sms_result.get("status", "UNKNOWN")
+            }
+
+        self.notification_log.append(result)
+        self._save_log()
+        return result
+
+    def dispatch_bulk_notices(self, violation_records, channels=None):
+        """
+        Dispatches notices for multiple violations.
+
+        Args:
+            violation_records (list[dict]): List of violation records.
+            channels (list): Channels to dispatch on.
+
+        Returns:
+            dict: Summary with total sent, failed, and per-record results.
+        """
+        results = []
+        sent_count = 0
+        failed_count = 0
+
+        for record in violation_records:
+            try:
+                res = self.dispatch_challan_notice(record, channels)
+                results.append(res)
+                sent_count += 1
+            except Exception as e:
+                print(f"[NotificationCenter] Bulk dispatch error for {record.get('plate_text')}: {e}")
+                failed_count += 1
+                results.append({
+                    "violation_id": record.get("violation_id", "?"),
+                    "overall_status": f"FAILED ({e})"
+                })
+
+        return {
+            "total_dispatched": sent_count,
+            "total_failed": failed_count,
+            "results": results
+        }
+
+    def get_notification_history(self):
+        """Returns the full notification dispatch history."""
+        return self.notification_log
+
+    def get_stats(self):
+        """Returns notification statistics."""
+        total = len(self.notification_log)
+        email_count = sum(1 for n in self.notification_log if "email" in n.get("channels", {}))
+        sms_count = sum(1 for n in self.notification_log if "sms" in n.get("channels", {}))
+        return {
+            "total_dispatched": total,
+            "email_sent": email_count,
+            "sms_sent": sms_count
+        }

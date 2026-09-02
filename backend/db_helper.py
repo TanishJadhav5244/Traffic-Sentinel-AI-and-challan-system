@@ -1,4 +1,5 @@
 import os
+import re
 import csv
 import datetime
 import uuid
@@ -163,6 +164,10 @@ class ViolationDatabase:
         except Exception as e:
             print(f"[DB] Error updating violation status: {e}")
             return False
+
+    def update_status(self, violation_id, new_status: str) -> bool:
+        """Alias for update_violation_status, used by api.py."""
+        return self.update_violation_status(str(violation_id), new_status)
 
     def clear_database(self):
         """Clears all records and deletes stored crop images and challans."""
@@ -377,6 +382,33 @@ class ViolationDatabase:
             "plate_crop": plate_path,
             "full_frame": frame_path
         }
+
+    def add_violation(self, plate_text, ocr_confidence, helmet_status="No-Helmet",
+                      plate_crop_path="", rider_crop_path="", owner_name="Unknown",
+                      vehicle_model="Motorcycle", challan_amount=1000.0,
+                      challan_path="", night_mode=False):
+        """Adds a violation record directly from pre-computed fields (used by API)."""
+        violation_id = str(uuid.uuid4())[:8]
+        timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        record = {
+            "violation_id": violation_id,
+            "timestamp": timestamp_str,
+            "plate_text": plate_text,
+            "ocr_confidence": round(float(ocr_confidence), 2),
+            "helmet_status": helmet_status,
+            "plate_crop_path": plate_crop_path,
+            "rider_crop_path": rider_crop_path,
+            "owner_name": owner_name,
+            "vehicle_model": vehicle_model,
+            "challan_amount": challan_amount,
+            "challan_path": challan_path,
+            "night_mode": night_mode,
+            "status": "Pending"
+        }
+        with open(self.csv_log_path, mode='a', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=self.headers)
+            writer.writerow(record)
+        return record
 
     def insert_violation(self, plate_number, confidence, owner_name, location, challan_id, challan_path, head_crop_path, plate_crop_path, full_frame_path):
         """Wrapper method around add_violation to match API payload parameters."""

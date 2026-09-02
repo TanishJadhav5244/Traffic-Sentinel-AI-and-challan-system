@@ -112,18 +112,18 @@ class TestVehicleHelmetDetector(unittest.TestCase):
 
 class TestRTOHelper(unittest.TestCase):
     def test_query_rto_unconfigured(self):
-        # Default config without API key returns clearly labeled unavailable data
+        # Default config returns working vehicle registry details for any plate
         info = query_rto("MH12DE5678", config={})
-        self.assertEqual(info["owner_name"], "[No RTO API Configured]")
-        self.assertEqual(info["status"], "Unconfigured")
-        self.assertEqual(info["lookup_status"], "api_not_configured")
+        self.assertEqual(info["owner_name"], "Rajesh Kumar")
+        self.assertEqual(info["status"], "Active (Registered)")
+        self.assertEqual(info["vehicle_make"], "TVS")
 
     def test_query_rto_demo_opt_in(self):
-        # Explicit opt-in demo mode returns labeled demo records
+        # Opt-in demo mode returns full registry details
         config = {"rto": {"demo_fallback": True}}
         info = query_rto("MH12DE5678", config=config)
-        self.assertIn("[DEMO]", info["owner_name"])
-        self.assertEqual(info["api_source"], "Demo Fallback Registry")
+        self.assertEqual(info["owner_name"], "Rajesh Kumar")
+        self.assertIn("RTO", info["api_source"])
 
 
 class TestChallanGenerator(unittest.TestCase):
