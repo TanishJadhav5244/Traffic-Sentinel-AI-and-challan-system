@@ -192,6 +192,18 @@ DEMO_RTO_REGISTRY = {
         "status": "Active (Registered)",
         "pucc_status": "Valid",
         "api_source": "RTO Parivahan Vahan Registry"
+    },
+    "MH10BM2431": {
+        "owner_name": "Tanish jadhav",
+        "vehicle_make": "Hyundai EON",
+        "vehicle_model": "ERA +",
+        "fuel_type": "Petrol",
+        "insurance_status": "Active (Insured till 2028)",
+        "registration_date": "2013-12-05",
+        "rto_office": "MH-10 Sangli",
+        "status": "Active (Registered)",
+        "pucc_status": "Valid",
+        "api_source": "RTO Parivahan Vahan Registry"
     }
 }
 
