@@ -467,7 +467,8 @@ class ViolationDatabase:
     def add_violation(self, plate_text, ocr_confidence, helmet_status="No-Helmet",
                       plate_crop_path="", rider_crop_path="", owner_name="Unknown",
                       vehicle_model="Motorcycle", challan_amount=1000.0,
-                      challan_path="", night_mode=False):
+                      challan_path="", night_mode=False, violation_type="No Helmet",
+                      speed_recorded=0.0, camera_id="CAM-01", location="MG Road Crossing"):
         """Adds a violation record directly from pre-computed fields (used by API)."""
         violation_id = str(uuid.uuid4())[:8]
         timestamp_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -477,11 +478,15 @@ class ViolationDatabase:
             "plate_text": plate_text,
             "ocr_confidence": round(float(ocr_confidence), 2),
             "helmet_status": helmet_status,
+            "violation_type": violation_type,
+            "speed_recorded": round(float(speed_recorded), 1),
+            "camera_id": camera_id,
+            "location": location,
             "plate_crop_path": plate_crop_path,
             "rider_crop_path": rider_crop_path,
             "owner_name": owner_name,
             "vehicle_model": vehicle_model,
-            "challan_amount": challan_amount,
+            "challan_amount": float(challan_amount),
             "challan_path": challan_path,
             "night_mode": night_mode,
             "status": "Pending"
@@ -503,5 +508,8 @@ class ViolationDatabase:
             vehicle_model="Motorcycle",
             challan_amount=1000.0,
             challan_path=challan_path or "",
-            night_mode=False
+            night_mode=False,
+            violation_type="No Helmet",
+            location=location or "MG Road Crossing"
         )
+

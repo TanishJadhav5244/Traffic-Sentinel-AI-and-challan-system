@@ -68,7 +68,7 @@ class DemoSMSGateway(BaseSMSGateway):
         record = self._create_record(
             phone_number, message, "MOCK_DELIVERED", "DemoSMSGateway", metadata
         )
-        print(f"[SMS-Demo] → {phone_number}: {message[:80]}...")
+        print(f"[SMS-Demo] -> {phone_number}: {message[:80]}...")
 
         # Persist to JSON log file
         try:

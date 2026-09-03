@@ -24,6 +24,8 @@ from backend.ocr_engine import LicensePlateOCR
 from backend.db_helper import ViolationDatabase
 from backend.rto_helper import query_rto
 from backend.tracker import VehicleTracker
+from backend.challan_payment import EChallanPaymentGateway
+from backend.notifier import NotificationCenter
 from frontend.styles import inject_custom_styles
 from frontend.components import (
     render_gov_header,
@@ -96,10 +98,20 @@ def get_db(_config):
 def get_tracker():
     return VehicleTracker(pixels_per_meter=20.0, cooldown_seconds=20)
 
+@st.cache_resource
+def get_payment_gateway(_db, _config):
+    return EChallanPaymentGateway(db_helper=_db, config=_config)
+
+@st.cache_resource
+def get_notification_center(_config):
+    return NotificationCenter(_config)
+
 detector = get_detector(config)
 ocr_engine = get_ocr_engine(config)
 db = get_db(config)
 tracker = get_tracker()
+payment_gateway = get_payment_gateway(db, config)
+notification_center = get_notification_center(config)
 
 # Official Government Top Header & Hero banner with live stats
 render_gov_header()
@@ -198,9 +210,10 @@ with sb_col2:
 
 
 # Tab setup
-tab_detector, tab_database, tab_ocr_playground, tab_rto, tab_analytics, tab_rest_api = st.tabs([
+tab_detector, tab_database, tab_payment, tab_ocr_playground, tab_rto, tab_analytics, tab_rest_api = st.tabs([
     "📸 Live Violation Detector",
     "📊 Violations Database",
+    "💳 E-Challan Payment Portal",
     "🔬 OCR Preprocessing Lab",
     "🔍 RTO Vehicle Registry",
     "📈 Analytics Dashboard",
@@ -751,7 +764,29 @@ with tab_database:
                             
                     st.markdown("<div style='height:4px;'></div>", unsafe_allow_html=True)
                     if st.button("📩 Dispatch SMS / Email Notice", key=f"btn_notify_{row['violation_id']}_{idx}", use_container_width=True, type="secondary"):
-                        st.toast(f"📩 E-Challan Notice dispatched via SMS & Email to vehicle owner ({row.get('owner_name', 'Registered Owner')})!", icon="📩")
+                        with st.spinner("Dispatching notification via SMS & Email..."):
+                            dispatch_res = notification_center.dispatch_challan_notice(row, channels=["email", "sms"])
+                        ch = dispatch_res.get("channels", {})
+                        email_info = ch.get("email", {})
+                        sms_info = ch.get("sms", {})
+                        st.toast(f"📩 Notice dispatched to {row.get('owner_name', 'Owner')}!", icon="📩")
+                        st.markdown(f"""
+                        <div style="background: rgba(15,23,42,0.9); border: 1px solid #3b82f6; border-radius: 10px; padding: 14px; margin-top: 8px; font-size: 0.85rem;">
+                            <div style="font-weight:700; color:#60a5fa; margin-bottom:8px;">📩 Notification Dispatch Summary</div>
+                            <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                                <div style="background:rgba(59,130,246,0.1); padding:10px; border-radius:8px; border:1px solid rgba(59,130,246,0.2);">
+                                    <div style="color:#93c5fd; font-weight:600;">✉️ Email</div>
+                                    <div>To: <code>{email_info.get('recipient', 'N/A')}</code></div>
+                                    <div>Status: <span style="color:#22c55e;">{email_info.get('status', 'N/A')}</span></div>
+                                </div>
+                                <div style="background:rgba(34,197,94,0.1); padding:10px; border-radius:8px; border:1px solid rgba(34,197,94,0.2);">
+                                    <div style="color:#86efac; font-weight:600;">📱 SMS</div>
+                                    <div>To: <code>{sms_info.get('recipient', 'N/A')}</code></div>
+                                    <div>Status: <span style="color:#22c55e;">{sms_info.get('status', 'N/A')}</span></div>
+                                </div>
+                            </div>
+                        </div>
+                        """, unsafe_allow_html=True)
                 with col_rider_crop:
                     r_path = row["rider_crop_path"]
                     if os.path.exists(str(r_path)):
@@ -813,53 +848,6 @@ with tab_database:
                 mime="text/csv",
                 use_container_width=True,
             )
-
-# ---------------------------------------------------------
-# TAB 6: REST API & Edge Hub
-# ---------------------------------------------------------
-with tab_rest_api:
-    render_section_header(
-        "REST API & CCTV Edge Node Integration",
-        "Connect external CCTV cameras, municipal surveillance streams, and edge processors via FastAPI endpoints.",
-        "🔌"
-    )
-    
-    col_api1, col_api2 = st.columns([1, 1], gap="large")
-    
-    with col_api1:
-        st.markdown("### 📡 API Server Status")
-        st.info("⚡ **FastAPI Service Endpoint**: `http://localhost:8000`\n\n📖 **Interactive OpenAPI Specs**: [http://localhost:8000/docs](http://localhost:8000/docs)")
-        
-        st.markdown("#### 🚀 Available Endpoints")
-        st.markdown("""
-        - `GET /` — Health check & system telemetry
-        - `POST /api/v1/scan/image` — Ingest camera frame & generate E-Challan
-        - `GET /api/v1/violations` — Query paginated violation records
-        - `GET /api/v1/violations/{id}` — Fetch single violation detail
-        - `PATCH /api/v1/violations/{id}/status` — Update ticket status (`PENDING`, `PAID`, `CANCELLED`)
-        - `GET /api/v1/analytics/stats` — Aggregate metrics & peak hours
-        - `GET /api/v1/challan/file/{filename}` — Serve generated E-Challan PNG
-        """)
-        
-    with col_api2:
-        st.markdown("### 🐍 Python Client Example")
-        st.code("""import requests
-
-url = "http://localhost:8000/api/v1/scan/image"
-files = {"file": open("traffic_frame.jpg", "rb")}
-params = {"enhance_low_light": True, "auto_generate_challan": True}
-
-response = requests.post(url, files=files, params=params)
-print(response.json())
-""", language="python")
-
-        st.markdown("### 🐳 Docker & Docker-Compose Deployment")
-        st.code("""# Launch full system (Streamlit Dashboard + FastAPI REST API)
-docker-compose up -d --build
-
-# View container logs
-docker-compose logs -f
-""", language="bash")
         with col_act2:
             if st.button("🗑️ Wipe Database Logs", type="secondary", use_container_width=True):
                 db.clear_database()
@@ -867,7 +855,227 @@ docker-compose logs -f
                 st.rerun()
 
 # ---------------------------------------------------------
-# TAB 3: OCR Preprocessing Lab
+# TAB 3: E-Challan Citizen Payment & Tax Receipt Portal
+# ---------------------------------------------------------
+with tab_payment:
+    render_section_header(
+        "Citizen E-Challan & Digital Payment Gateway",
+        "Search citations by license plate or challan ID, settle traffic fines via UPI QR / Razorpay, and download official MoRTH Tax Receipts.",
+        "💳"
+    )
+
+    # ── Real-Time Fine Recovery & Payment Ledger KPI Metrics ──
+    pay_analytics = payment_gateway.get_payment_analytics()
+    kpi_p1, kpi_p2, kpi_p3, kpi_p4 = st.columns(4)
+    with kpi_p1:
+        st.metric("Total Revenue Collected", f"₹{pay_analytics.get('total_revenue_inr', 0.0):,.0f}", delta=f"{pay_analytics.get('total_paid_tickets', 0)} Settled")
+    with kpi_p2:
+        st.metric("Outstanding Unpaid Penalties", f"₹{pay_analytics.get('pending_revenue_inr', 0.0):,.0f}", delta=f"{pay_analytics.get('total_pending_tickets', 0)} Pending", delta_color="inverse")
+    with kpi_p3:
+        st.metric("Fine Recovery Rate", f"{pay_analytics.get('recovery_rate_pct', 0.0)}%", delta="MoRTH Target: 85%")
+    with kpi_p4:
+        method_counts = pay_analytics.get("method_breakdown", {})
+        top_method = max(method_counts, key=method_counts.get) if method_counts else "UPI_ONLINE"
+        st.metric("Preferred Channel", top_method.replace("_", " "), delta=f"{sum(method_counts.values())} txns")
+
+    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+
+    pay_quick_plates = ["MH12DE5678", "MH12AB1234", "DL3CAY1111", "MH10BM2431", "MH10ER9193"]
+    if "pay_query_input" not in st.session_state:
+        st.session_state.pay_query_input = ""
+
+    render_quick_plate_chips(pay_quick_plates, key_prefix="btn_pay_chip")
+
+    render_panel_start("panel-input")
+    with st.form("challan_payment_search_form"):
+        pay_search_val = st.text_input(
+            "Enter License Plate Number or Challan ID (e.g. MH12DE5678, DL3CAY1111, 763c6f40)",
+            value=st.session_state.pay_query_input,
+            key="pay_search_text_input",
+            placeholder="MH12DE5678"
+        )
+        btn_query_fines = st.form_submit_button("🔎 Search Outstanding Challans", use_container_width=True, type="primary")
+    render_panel_end()
+
+    all_v = db.get_all_violations()
+    target_records = pd.DataFrame()
+
+    if pay_search_val.strip():
+        clean_q = pay_search_val.strip().upper().replace(" ", "")
+        if not all_v.empty:
+            match_plate = all_v["plate_text"].astype(str).str.upper().str.replace(" ", "").str.contains(clean_q, na=False)
+            match_id = all_v["violation_id"].astype(str).str.upper().str.contains(clean_q, na=False)
+            target_records = all_v[match_plate | match_id]
+
+    if not pay_search_val.strip():
+        # Show all pending citations by default
+        if not all_v.empty and "status" in all_v.columns:
+            target_records = all_v[all_v["status"].astype(str).str.upper() == "PENDING"]
+
+    if target_records.empty and pay_search_val.strip():
+        st.success(f"🎉 No outstanding unpaid challans found for `{pay_search_val.upper()}`! Zero traffic penalties pending.")
+    elif target_records.empty and not pay_search_val.strip():
+        render_empty_state("No Unpaid Citations", "All traffic citations in the system have been settled and cleared.", "✅")
+    else:
+        pending_count = (target_records["status"].astype(str).str.upper() == "PENDING").sum() if "status" in target_records.columns else len(target_records)
+        st.info(f"📋 Found **{len(target_records)}** total citation records (**{pending_count} Pending Payment**).")
+
+        for idx, row in target_records.iterrows():
+            v_id = str(row["violation_id"])
+            c_status = str(row.get("status", "Pending")).capitalize()
+            amt = float(row.get("challan_amount", 1000.0))
+            is_paid = (c_status.upper() == "PAID")
+
+            with st.container():
+                st.markdown(f"""
+                <div style="background: rgba(15,23,42,0.85); border: 1px solid {'#22c55e' if is_paid else '#ef4444'}; border-radius: 12px; padding: 18px; margin-bottom: 16px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 10px; margin-bottom: 12px;">
+                        <div>
+                            <span style="font-size: 1.1rem; font-weight: 700; color: #f8fafc;">E-Challan #{v_id}</span>
+                            <span style="margin-left: 8px; font-size: 0.8rem; color: #94a3b8;">Issued: {row['timestamp']}</span>
+                        </div>
+                        <div>
+                            <span class="rc-badge {'rc-badge-active' if is_paid else 'rc-badge-expired'}">{c_status}</span>
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; font-size: 0.9rem;">
+                        <div><span style="color:#94a3b8;">Vehicle Number:</span><br><b style="color:#f59e0b; font-size: 1.05rem;">{row['plate_text']}</b></div>
+                        <div><span style="color:#94a3b8;">Registered Owner:</span><br><b>{row.get('owner_name', 'Unknown')}</b></div>
+                        <div><span style="color:#94a3b8;">Violation Type:</span><br><b style="color:#ef4444;">{row.get('violation_type', 'No Helmet')}</b></div>
+                        <div><span style="color:#94a3b8;">Location / Camera:</span><br><b>{row.get('location', 'Surveillance Sector')}</b></div>
+                        <div><span style="color:#94a3b8;">Penalty Amount:</span><br><b style="color:#22c55e; font-size: 1.15rem;">₹{amt:,.2f}</b></div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                if not is_paid:
+                    col_pay_method, col_qr_code = st.columns([3, 2], gap="large")
+                    with col_pay_method:
+                        st.markdown("#### 💳 Choose Payment Mode")
+                        pay_method = st.radio(
+                            "Select Payment Gateway",
+                            [
+                                "UPI (Google Pay / PhonePe / Paytm / BHIM)",
+                                "Debit / Credit Card (Visa, RuPay, MasterCard)",
+                                "NetBanking (SBI, HDFC, ICICI, Axis, PNB)",
+                                "Digital Wallet (Amazon Pay, Paytm Wallet)"
+                            ],
+                            key=f"pm_sel_{v_id}_{idx}"
+                        )
+
+                        clean_method_code = "UPI_ONLINE"
+                        if "Card" in pay_method:
+                            clean_method_code = "CARD_GATEWAY"
+                        elif "NetBanking" in pay_method:
+                            clean_method_code = "NETBANKING"
+                        elif "Wallet" in pay_method:
+                            clean_method_code = "WALLET"
+
+                        if st.button(f"⚡ Settle Challan #{v_id} (₹{amt:,.0f}) Now", key=f"btn_execute_pay_{v_id}_{idx}", type="primary", use_container_width=True):
+                            with st.spinner("Processing transaction via secure payment gateway..."):
+                                res = payment_gateway.process_payment(v_id, payment_method=clean_method_code)
+                                if res.get("status") == "SUCCESS":
+                                    st.success(f"🎉 Payment Verified & Confirmed! Transaction ID: `{res.get('transaction_id')}`")
+                                    # Auto-dispatch payment confirmation notification
+                                    pay_notice_record = dict(row)
+                                    pay_notice_record["status"] = "Paid"
+                                    notification_center.dispatch_challan_notice(pay_notice_record, channels=["email", "sms"])
+                                    st.info("📩 Payment confirmation dispatched via SMS & Email to registered owner.")
+                                    st.toast(f"✅ Challan #{v_id} cleared! Receipt generated & notification sent.", icon="✅")
+                                    st.rerun()
+                                else:
+                                    st.error(f"Payment error: {res.get('message', 'Failed to process')}")
+
+                    with col_qr_code:
+                        st.markdown("#### 📱 Scan UPI QR to Pay")
+                        st.caption(f"Scan with any UPI app to pay **₹{amt:,.2f}** instantly to MoRTH.")
+                        # UPI QR Simulation Box
+                        st.markdown(f"""
+                        <div style="background: #ffffff; padding: 12px; border-radius: 10px; width: 170px; text-align: center; border: 2px solid #22c55e; margin: 0 auto 10px auto;">
+                            <img src="https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=upi://pay?pa=morth.challan@gov.in&pn=MoRTH%20Traffic%20Police&am={amt:.2f}&tn=Challan%20{v_id}" width="140" height="140" style="display:block; margin:0 auto;"/>
+                            <div style="color: #0f172a; font-size: 0.7rem; font-weight: 700; margin-top: 4px;">SCAN & PAY ₹{amt:.0f}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    # Paid receipt actions
+                    st.success(f"✔ **Challan Cleared**: This citation is marked as **PAID**. No further action required.")
+                    # Check for receipt files (PNG and PDF)
+                    receipts_dir = "violations/challans"
+                    png_receipts = [f for f in os.listdir(receipts_dir) if v_id in f and f.startswith("receipt_") and f.endswith(".png")] if os.path.exists(receipts_dir) else []
+                    pdf_receipts = [f for f in os.listdir(receipts_dir) if v_id in f and f.startswith("receipt_") and f.endswith(".pdf")] if os.path.exists(receipts_dir) else []
+
+                    if png_receipts:
+                        rcp_file = os.path.join(receipts_dir, png_receipts[0])
+                        col_rcp_img, col_rcp_dl = st.columns([3, 1.2])
+                        with col_rcp_img:
+                            st.image(rcp_file, caption="Official MoRTH Payment Tax Receipt", use_container_width=True)
+                        with col_rcp_dl:
+                            with open(rcp_file, "rb") as rf:
+                                st.download_button(
+                                    label="📥 Tax Receipt (PNG)",
+                                    data=rf,
+                                    file_name=f"receipt_{v_id}.png",
+                                    mime="image/png",
+                                    key=f"dl_rcp_png_{v_id}_{idx}",
+                                    use_container_width=True
+                                )
+                            if pdf_receipts:
+                                pdf_file = os.path.join(receipts_dir, pdf_receipts[0])
+                                with open(pdf_file, "rb") as pf:
+                                    st.download_button(
+                                        label="📄 Official PDF Receipt",
+                                        data=pf,
+                                        file_name=f"receipt_{v_id}.pdf",
+                                        mime="application/pdf",
+                                        key=f"dl_rcp_pdf_{v_id}_{idx}",
+                                        use_container_width=True
+                                    )
+                st.divider()
+
+    # ── Notification Dispatch History ──────────────────────────────
+    st.markdown("---")
+    render_section_header(
+        "Notification Dispatch History",
+        "Real-time SMS & Email delivery audit trail for all E-Challan notices dispatched through this session.",
+        "📋"
+    )
+
+    notif_history = notification_center.get_notification_history()
+    notif_stats = notification_center.get_stats()
+
+    nstat_c1, nstat_c2, nstat_c3 = st.columns(3)
+    with nstat_c1:
+        st.metric("Total Dispatched", notif_stats.get("total_dispatched", 0))
+    with nstat_c2:
+        st.metric("Emails Sent", notif_stats.get("email_sent", 0))
+    with nstat_c3:
+        st.metric("SMS Sent", notif_stats.get("sms_sent", 0))
+
+    if notif_history:
+        for nidx, notif in enumerate(reversed(notif_history[-20:])):
+            ch = notif.get("channels", {})
+            email_ch = ch.get("email", {})
+            sms_ch = ch.get("sms", {})
+            st.markdown(f"""
+            <div style="background: rgba(15,23,42,0.7); border: 1px solid rgba(59,130,246,0.3); border-radius: 8px; padding: 12px; margin-bottom: 8px; font-size: 0.82rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <div>
+                        <span style="color:#60a5fa; font-weight:700;">📩 Challan #{notif.get('violation_id','?')}</span>
+                        <span style="color:#94a3b8; margin-left:10px;">{notif.get('plate','')}</span>
+                    </div>
+                    <span style="color:#64748b; font-size:0.75rem;">{notif.get('timestamp','')}</span>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
+                    <div>✉️ Email → <code style="font-size:0.75rem;">{email_ch.get('recipient','—')}</code> <span style="color:{'#22c55e' if 'SENT' in str(email_ch.get('status','')) else '#f59e0b'};">[{email_ch.get('status','—')}]</span></div>
+                    <div>📱 SMS → <code style="font-size:0.75rem;">{sms_ch.get('recipient','—')}</code> <span style="color:{'#22c55e' if 'DELIVERED' in str(sms_ch.get('status','')) or 'SENT' in str(sms_ch.get('status','')) else '#f59e0b'};">[{sms_ch.get('status','—')}]</span></div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        render_empty_state("No Notifications Dispatched Yet", "Use the 'Dispatch SMS / Email Notice' button in the Violations Database tab or pay a challan to trigger automated notices.", "📭")
+
+# ---------------------------------------------------------
+# TAB 4: OCR Preprocessing Lab
 # ---------------------------------------------------------
 with tab_ocr_playground:
     render_section_header(
@@ -1398,3 +1606,52 @@ with tab_analytics:
                 mime="text/csv",
                 use_container_width=True,
             )
+
+# ---------------------------------------------------------
+# TAB 7: REST API & Edge Hub
+# ---------------------------------------------------------
+with tab_rest_api:
+    render_section_header(
+        "REST API & CCTV Edge Node Integration",
+        "Connect external CCTV cameras, municipal surveillance streams, and edge processors via FastAPI endpoints.",
+        "🔌"
+    )
+    
+    col_api1, col_api2 = st.columns([1, 1], gap="large")
+    
+    with col_api1:
+        st.markdown("### 📡 API Server Status")
+        st.info("⚡ **FastAPI Service Endpoint**: `http://localhost:8000`\n\n📖 **Interactive OpenAPI Specs**: [http://localhost:8000/docs](http://localhost:8000/docs)")
+        
+        st.markdown("#### 🚀 Available Endpoints")
+        st.markdown("""
+        - `GET /` — Health check & system telemetry
+        - `POST /api/v1/scan/image` — Ingest camera frame & generate E-Challan
+        - `GET /api/v1/violations` — Query paginated violation records
+        - `GET /api/v1/violations/{id}` — Fetch single violation detail
+        - `PATCH /api/v1/violations/{id}/status` — Update ticket status (`PENDING`, `PAID`, `CANCELLED`)
+        - `POST /api/v1/challan/{id}/pay` — Process UPI / Online E-Challan payment
+        - `GET /api/v1/challan/{id}/receipt` — Download official Tax Receipt
+        - `GET /api/v1/analytics/stats` — Aggregate metrics & peak hours
+        - `GET /api/v1/challan/file/{filename}` — Serve generated E-Challan PNG
+        """)
+        
+    with col_api2:
+        st.markdown("### 🐍 Python Client Example")
+        st.code("""import requests
+
+url = "http://localhost:8000/api/v1/scan/image"
+files = {"file": open("traffic_frame.jpg", "rb")}
+params = {"enhance_low_light": True, "auto_generate_challan": True}
+
+response = requests.post(url, files=files, params=params)
+print(response.json())
+""", language="python")
+
+        st.markdown("### 🐳 Docker & Docker-Compose Deployment")
+        st.code("""# Launch full system (Streamlit Dashboard + FastAPI REST API)
+docker-compose up -d --build
+
+# View container logs
+docker-compose logs -f
+""", language="bash")

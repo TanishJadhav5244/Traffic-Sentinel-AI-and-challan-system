@@ -216,6 +216,18 @@ DEMO_RTO_REGISTRY = {
         "status": "Active (Registered)",
         "pucc_status": "Valid",
         "api_source": "RTO Parivahan Vahan Registry"
+    },
+    "MH10ER8266": {
+        "owner_name": "Tanish jadhav",
+        "vehicle_make": "Royal Enfiled",
+        "vehicle_model": "Classic 350",
+        "fuel_type": "Petrol",
+        "insurance_status": "Active (Insured till 2028)",
+        "registration_date": "2025-06-15",
+        "rto_office": "MH-10 Sangli",
+        "status": "Active (Registered)",
+        "pucc_status": "Valid",
+        "api_source": "RTO Parivahan Vahan Registry"
     }
 }
 

@@ -74,7 +74,7 @@ class DemoPaymentGateway(BasePaymentGateway):
             "bank_ref": f"NEFT-{uuid.uuid4().hex[:12].upper()}" if "BANK" in payment_method else None,
         }
         self.transaction_log.append(record)
-        print(f"[Payment-Demo] Payment {tx_id} for Challan #{challan_id}: ₹{amount} — SUCCESS")
+        print(f"[Payment-Demo] Payment {tx_id} for Challan #{challan_id}: INR {amount} -- SUCCESS")
         return record
 
     def verify_payment(self, transaction_id):
@@ -282,23 +282,83 @@ class EChallanPaymentGateway:
         stamp_y = qr_y + qr_size + 25
         draw.rectangle([40, stamp_y, canvas_w - 40, stamp_y + 40], fill=(240, 253, 244), outline=(34, 197, 94))
         f_stamp = get_font("arial", 12, bold=True)
-        draw.text((60, stamp_y + 12), "✔ DIGITAL PAYMENT VERIFIED — NO OUTSTANDING FINES REMAINING", fill=(22, 101, 52), font=f_stamp)
+        draw.text((60, stamp_y + 12), "[PAID] DIGITAL PAYMENT VERIFIED -- NO OUTSTANDING FINES REMAINING", fill=(22, 101, 52), font=f_stamp)
 
         # Security hash
         sec_hash = abs(hash(f"{challan_id}{transaction_id}")) % 10000000000
         f_sec = get_font("arial", 8)
         draw.text((40, stamp_y + 50), f"Security Hash: MoRTH-PAY-{sec_hash:010d} | Anti-Tamper Digital Seal", fill=(148, 163, 184), font=f_sec)
 
-        filename = f"receipt_{challan_id}_{transaction_id}.png"
-        path = os.path.join(self.output_dir, filename)
-        img.save(path)
-        return path
+        # Save PNG
+        png_filename = f"receipt_{challan_id}_{transaction_id}.png"
+        png_path = os.path.join(self.output_dir, png_filename)
+        img.save(png_path)
 
-    def get_receipt_path(self, transaction_id):
-        """Finds a receipt file by transaction ID."""
+        # Save PDF
+        pdf_filename = f"receipt_{challan_id}_{transaction_id}.pdf"
+        pdf_path = os.path.join(self.output_dir, pdf_filename)
+        try:
+            img.save(pdf_path, "PDF", resolution=100.0)
+        except Exception as e:
+            print(f"[Payment] PDF receipt generation note: {e}")
+
+        return png_path
+
+    def get_receipt_path(self, transaction_id, ext="png"):
+        """Finds a receipt file by transaction ID (png or pdf)."""
         if not os.path.exists(self.output_dir):
             return None
+        target_ext = f".{ext.lower()}"
         for fname in os.listdir(self.output_dir):
-            if transaction_id in fname and fname.startswith("receipt_"):
+            if transaction_id in fname and fname.startswith("receipt_") and fname.endswith(target_ext):
                 return os.path.join(self.output_dir, fname)
         return None
+
+    def get_payment_analytics(self):
+        """
+        Computes aggregate payment metrics:
+        total revenue collected, total pending fines, collection recovery rate,
+        and payment method distributions.
+        """
+        df = self.db.get_all_violations()
+        tx_log = self.gateway.get_transaction_log()
+
+        if df.empty:
+            return {
+                "total_revenue_inr": 0.0,
+                "pending_revenue_inr": 0.0,
+                "recovery_rate_pct": 0.0,
+                "total_paid_tickets": 0,
+                "total_pending_tickets": 0,
+                "method_breakdown": {},
+                "recent_transactions": tx_log[-10:] if tx_log else []
+            }
+
+        fines = df.get("challan_amount", 1000.0).astype(float)
+        statuses = df.get("status", "Pending").astype(str).str.upper()
+
+        paid_mask = (statuses == "PAID")
+        pending_mask = (statuses == "PENDING")
+
+        total_collected = float(fines[paid_mask].sum()) if any(paid_mask) else 0.0
+        total_pending = float(fines[pending_mask].sum()) if any(pending_mask) else 0.0
+        total_fines = total_collected + total_pending
+
+        recovery_rate = round((total_collected / total_fines * 100.0), 1) if total_fines > 0 else 0.0
+
+        # Method breakdown from transactions
+        methods = {}
+        for tx in tx_log:
+            m = tx.get("payment_method", "UPI_ONLINE")
+            methods[m] = methods.get(m, 0) + 1
+
+        return {
+            "total_revenue_inr": total_collected,
+            "pending_revenue_inr": total_pending,
+            "recovery_rate_pct": recovery_rate,
+            "total_paid_tickets": int(paid_mask.sum()),
+            "total_pending_tickets": int(pending_mask.sum()),
+            "method_breakdown": methods,
+            "recent_transactions": tx_log[-10:] if tx_log else []
+        }
+

@@ -1,0 +1,18 @@
+[
+  {
+    "violation_id": "TEST01",
+    "plate": "MH12DE5678",
+    "channels": {
+      "email": {
+        "recipient": "mh12de5678@owner-contact.in",
+        "status": "MOCK_SENT"
+      },
+      "sms": {
+        "recipient": "+915342345574",
+        "status": "MOCK_DELIVERED"
+      }
+    },
+    "timestamp": "2026-09-03 15:26:43",
+    "overall_status": "DISPATCHED"
+  }
+]

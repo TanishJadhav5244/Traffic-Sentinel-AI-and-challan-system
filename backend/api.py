@@ -244,3 +244,22 @@ def pay_challan(challan_id: str, method: str = Query("UPI_ONLINE", description="
     if res.get("status") == "ERROR":
         raise HTTPException(status_code=404, detail=res.get("message"))
     return res
+
+@app.get("/api/v1/challan/{challan_id}/receipt")
+def get_challan_receipt(challan_id: str):
+    """Serves the generated official Payment Tax Receipt image for a paid E-Challan."""
+    receipts_dir = os.path.join("violations", "challans")
+    if os.path.exists(receipts_dir):
+        for f in os.listdir(receipts_dir):
+            if challan_id in f and f.startswith("receipt_"):
+                return FileResponse(os.path.join(receipts_dir, f), media_type="image/png")
+    raise HTTPException(status_code=404, detail="Payment receipt not found for this citation.")
+
+@app.get("/api/v1/payments/stats")
+def get_payment_stats():
+    """Returns real-time revenue collection, fine recovery percentage, and payment mode analytics."""
+    from backend.challan_payment import EChallanPaymentGateway
+    gateway = EChallanPaymentGateway(db)
+    return gateway.get_payment_analytics()
+
+

@@ -1,0 +1,12 @@
+[
+  {
+    "type": "SMS",
+    "provider": "DemoSMSGateway",
+    "recipient": "+915342345574",
+    "message": "Traffic Sentinel: E-Challan #TEST01 issued for MH12DE5678. Fine: INR 1000. Pay at echallan.parivahan.gov.in",
+    "status": "MOCK_DELIVERED",
+    "timestamp": "2026-09-03 15:26:43",
+    "challan_id": "TEST01",
+    "plate": "MH12DE5678"
+  }
+]
