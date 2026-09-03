@@ -207,9 +207,9 @@ DEMO_RTO_REGISTRY = {
     },
     "MH10ER9193": {
         "owner_name": "Tukaram jadhav",
-        "vehicle_make": "Suzuki Eritga",
-        "vehicle_model": "Ertiga zxi",
-        "fuel_type": "Petrol",
+        "vehicle_make": "Toyota",
+        "vehicle_model": "Fortuner",
+        "fuel_type": "Diesel",
         "insurance_status": "Active (Insured till 2028)",
         "registration_date": "2013-12-05",
         "rto_office": "MH-10 Sangli",
@@ -218,6 +218,18 @@ DEMO_RTO_REGISTRY = {
         "api_source": "RTO Parivahan Vahan Registry"
     },
     "MH10ER8266": {
+        "owner_name": "Tanish jadhav",
+        "vehicle_make": "Royal Enfiled",
+        "vehicle_model": "Classic 350",
+        "fuel_type": "Petrol",
+        "insurance_status": "Active (Insured till 2028)",
+        "registration_date": "2025-06-15",
+        "rto_office": "MH-10 Sangli",
+        "status": "Active (Registered)",
+        "pucc_status": "Valid",
+        "api_source": "RTO Parivahan Vahan Registry"
+    },
+    "MH10BM": {
         "owner_name": "Tanish jadhav",
         "vehicle_make": "Royal Enfiled",
         "vehicle_model": "Classic 350",

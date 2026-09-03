@@ -49,6 +49,31 @@ class TestPaymentGateway(unittest.TestCase):
         self.assertEqual(res["status"], "SUCCESS")
         self.assertIn("RazorpayGateway", res["gateway"])
 
+    def test_payment_analytics_and_pdf(self):
+        record = self.db.add_violation(
+            plate_text="DL3CAY1111",
+            ocr_confidence=0.88,
+            helmet_status="No-Helmet",
+            challan_amount=1500.0
+        )
+        v_id = record["violation_id"]
+        res = self.gateway.process_payment(v_id, payment_method="NETBANKING_SBI")
+        self.assertEqual(res["status"], "SUCCESS")
+
+        # Test receipt lookup
+        png_path = self.gateway.get_receipt_path(res["transaction_id"], "png")
+        pdf_path = self.gateway.get_receipt_path(res["transaction_id"], "pdf")
+        self.assertIsNotNone(png_path)
+        self.assertTrue(os.path.exists(png_path))
+        if pdf_path:
+            self.assertTrue(os.path.exists(pdf_path))
+
+        # Test analytics
+        analytics = self.gateway.get_payment_analytics()
+        self.assertGreaterEqual(analytics["total_revenue_inr"], 1500.0)
+        self.assertGreater(analytics["recovery_rate_pct"], 0)
+
 if __name__ == "__main__":
     unittest.main()
+
 
