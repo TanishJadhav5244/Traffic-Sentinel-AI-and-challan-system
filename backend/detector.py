@@ -379,38 +379,113 @@ class VehicleHelmetDetector:
         return False
 
     # ──────────────────────────────────────────────────────────────────────────
+    # Triple Riding & Multi-Violation Detection
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def detect_triple_riding(self, img, detections):
+        """
+        Detects instances of Triple Riding (>=3 riders on a two-wheeler)
+        by analyzing spatial clustering of riders and motorcycle bounding zones.
+
+        Returns:
+            list of dicts: {"box": np.ndarray[x1,y1,x2,y2], "conf": float, "rider_count": int, "rider_boxes": list}
+        """
+        riders = detections.get("riders", [])
+        if len(riders) < 3:
+            return []
+
+        triple_riding_clusters = []
+        h, w = img.shape[:2]
+
+        # Group riders whose bounding boxes horizontally overlap or are in close proximity
+        used_indices = set()
+        for i, r1 in enumerate(riders):
+            if i in used_indices:
+                continue
+            box1 = r1["box"]
+            cluster = [r1]
+            cluster_indices = {i}
+
+            for j, r2 in enumerate(riders):
+                if j in cluster_indices or j in used_indices:
+                    continue
+                box2 = r2["box"]
+
+                # Check horizontal distance between riders
+                c1_x = (box1[0] + box1[2]) / 2.0
+                c2_x = (box2[0] + box2[2]) / 2.0
+                max_width = max(box1[2] - box1[0], box2[2] - box2[0])
+
+                # Vertical alignment check (riders are on roughly same plane)
+                y_overlap = max(0, min(box1[3], box2[3]) - max(box1[1], box2[1]))
+                min_h = min(box1[3] - box1[1], box2[3] - box2[1])
+
+                if abs(c1_x - c2_x) < max_width * 1.6 and (y_overlap > min_h * 0.3 or abs(box1[1] - box2[1]) < min_h * 0.6):
+                    cluster.append(r2)
+                    cluster_indices.add(j)
+
+            if len(cluster) >= 3:
+                for idx in cluster_indices:
+                    used_indices.add(idx)
+
+                all_boxes = [c["box"] for c in cluster]
+                min_x = max(0, min(b[0] for b in all_boxes))
+                min_y = max(0, min(b[1] for b in all_boxes))
+                max_x = min(w, max(b[2] for b in all_boxes))
+                max_y = min(h, max(b[3] for b in all_boxes))
+
+                avg_conf = float(np.mean([c["conf"] for c in cluster]))
+                triple_riding_clusters.append({
+                    "box": np.array([min_x, min_y, max_x, max_y]),
+                    "conf": avg_conf,
+                    "rider_count": len(cluster),
+                    "rider_boxes": all_boxes
+                })
+
+        return triple_riding_clusters
+
+    # ──────────────────────────────────────────────────────────────────────────
     # Violation association
     # ──────────────────────────────────────────────────────────────────────────
 
-    def associate_violations(self, detections):
+    def associate_violations(self, detections, speed_kmh=None, speed_limit=60.0):
         """
-        Associates "no-helmet" detections with the closest "license plate".
-
-        For every no-helmet crop, finds the nearest plate that lies below it.
-        Distance is from the bottom-center of the no-helmet box to the top-center
-        of the plate box.
+        Associates detected violations (No Helmet, Triple Riding, Over-Speeding)
+        with the closest vehicle license plate.
 
         Returns:
-            list of dicts: each with "no_helmet", "plate", and "rider" keys.
+            list of dicts: each with:
+              - "violation_types": list of strings e.g. ["No Helmet", "Triple Riding", "Over-Speeding"]
+              - "fine_amount": total fine in INR
+              - "no_helmet": no-helmet detection info (or None)
+              - "plate": plate detection info
+              - "rider": associated rider bounding box
+              - "triple_riding": triple riding cluster info (or None)
+              - "speed_kmh": recorded speed
+              - "severity": "HIGH", "CRITICAL", or "MEDIUM"
         """
-        pairs       = []
+        pairs = []
         used_plates = set()
 
-        for no_helmet in detections["no_helmets"]:
+        # Step 1: Detect Triple Riding clusters
+        triple_clusters = self.detect_triple_riding(None if not detections.get("riders") else np.zeros((1000, 1000, 3), dtype=np.uint8), detections)
+
+        # Step 2: Handle No-Helmet violations
+        for no_helmet in detections.get("no_helmets", []):
             nh_box = no_helmet["box"]
             nh_bottom_center = ((nh_box[0] + nh_box[2]) / 2, nh_box[3])
 
             best_plate = None
             min_dist   = float("inf")
 
-            for idx, plate in enumerate(detections["plates"]):
+            for idx, plate in enumerate(detections.get("plates", [])):
                 if idx in used_plates:
                     continue
                 p_box        = plate["box"]
                 p_top_center = ((p_box[0] + p_box[2]) / 2, p_box[1])
 
-                # Plate must be at or below the head detection (with 20-px tolerance)
-                if p_top_center[1] > nh_bottom_center[1] - 20:
+                # Plate must be at or below the head detection (with 30-px tolerance)
+                if p_top_center[1] > nh_bottom_center[1] - 30:
                     dist = np.hypot(
                         nh_bottom_center[0] - p_top_center[0],
                         nh_bottom_center[1] - p_top_center[1],
@@ -426,7 +501,7 @@ class VehicleHelmetDetector:
                 # Find the rider containing or nearest to this head
                 best_rider = None
                 r_min_dist = float("inf")
-                for rider in detections["riders"]:
+                for rider in detections.get("riders", []):
                     r_box = rider["box"]
                     if (r_box[0] <= nh_box[0] and r_box[1] <= nh_box[1]
                             and r_box[2] >= nh_box[2] and r_box[3] >= nh_box[3]):
@@ -439,11 +514,78 @@ class VehicleHelmetDetector:
                         r_min_dist = dist
                         best_rider = rider
 
+                # Check if this rider is also part of a triple-riding cluster
+                v_types = ["No Helmet"]
+                fine = 1000.0
+                associated_triple = None
+
+                for tc in triple_clusters:
+                    t_box = tc["box"]
+                    if (best_rider and t_box[0] <= best_rider["box"][0] and t_box[2] >= best_rider["box"][2]) or \
+                       (t_box[0] <= nh_box[0] and t_box[2] >= nh_box[2]):
+                        v_types.append(f"Triple Riding ({tc['rider_count']} Riders)")
+                        fine += 1000.0
+                        associated_triple = tc
+                        break
+
+                # Check speed violation
+                if speed_kmh is not None and speed_kmh > speed_limit:
+                    v_types.append(f"Over-Speeding ({speed_kmh:.1f} km/h)")
+                    fine += 2000.0
+
+                severity = "CRITICAL" if len(v_types) > 1 or (speed_kmh and speed_kmh > speed_limit + 20) else "HIGH"
+
                 pairs.append({
+                    "violation_types": v_types,
+                    "fine_amount": fine,
                     "no_helmet": no_helmet,
-                    "plate":     plate_info,
-                    "rider":     best_rider if best_rider else no_helmet,
+                    "plate": plate_info,
+                    "rider": best_rider if best_rider else no_helmet,
+                    "triple_riding": associated_triple,
+                    "speed_kmh": speed_kmh or 0.0,
+                    "severity": severity
                 })
+
+        # Step 3: Handle standalone Triple-Riding violations if helmet was worn
+        for tc in triple_clusters:
+            t_box = tc["box"]
+            # Check if this cluster was already paired
+            already_paired = any(p.get("triple_riding") is not None and np.array_equal(p["triple_riding"]["box"], t_box) for p in pairs)
+            if not already_paired:
+                # Find nearest unused plate
+                best_plate = None
+                min_dist = float("inf")
+                t_bottom_center = ((t_box[0] + t_box[2]) / 2, t_box[3])
+
+                for idx, plate in enumerate(detections.get("plates", [])):
+                    if idx in used_plates:
+                        continue
+                    p_box = plate["box"]
+                    p_top_center = ((p_box[0] + p_box[2]) / 2, p_box[1])
+                    dist = np.hypot(t_bottom_center[0] - p_top_center[0], t_bottom_center[1] - p_top_center[1])
+                    if dist < min_dist:
+                        min_dist = dist
+                        best_plate = (idx, plate)
+
+                if best_plate is not None:
+                    idx, plate_info = best_plate
+                    used_plates.add(idx)
+                    v_types = [f"Triple Riding ({tc['rider_count']} Riders)"]
+                    fine = 1000.0
+                    if speed_kmh is not None and speed_kmh > speed_limit:
+                        v_types.append(f"Over-Speeding ({speed_kmh:.1f} km/h)")
+                        fine += 2000.0
+
+                    pairs.append({
+                        "violation_types": v_types,
+                        "fine_amount": fine,
+                        "no_helmet": None,
+                        "plate": plate_info,
+                        "rider": {"box": t_box, "conf": tc["conf"]},
+                        "triple_riding": tc,
+                        "speed_kmh": speed_kmh or 0.0,
+                        "severity": "HIGH"
+                    })
 
         return pairs
 
@@ -451,42 +593,69 @@ class VehicleHelmetDetector:
     # Annotation
     # ──────────────────────────────────────────────────────────────────────────
 
-    def draw_annotations(self, img, detections, violations):
+    def draw_annotations(self, img, detections, violations, tracked_vehicles=None, speed_limit=60.0):
         """
-        Draws bounding boxes and labels on the image for visualisation.
-        - Yellow -> rider bounding box
-        - Green  -> helmet compliant
-        - Red    -> no-helmet violation + associated plate
-        - Blue   -> non-violating detected plate
+        Draws HUD bounding boxes and labels on the image for visualisation.
+        - Yellow/Cyan -> Rider bounding box
+        - Green       -> Helmet compliant
+        - Red         -> No-Helmet violation + associated plate
+        - Purple      -> Triple-Riding cluster
+        - Crimson     -> Speed violation alert HUD
+        - Orange/Blue -> Standard detected plate
         """
         annotated = img.copy()
-        violating_plate_boxes = [v["plate"]["box"] for v in violations]
+        violating_plate_boxes = [v["plate"]["box"] for v in violations if "plate" in v and v["plate"] is not None]
 
-        for r in detections["riders"]:
+        # Draw Riders
+        for r in detections.get("riders", []):
             box = r["box"]
-            cv2.rectangle(annotated, (box[0], box[1]), (box[2], box[3]), (255, 255, 0), 2)
-            cv2.putText(annotated, f"Rider {r['conf']:.2f}", (box[0], box[1] - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+            cv2.rectangle(annotated, (box[0], box[1]), (box[2], box[3]), (255, 200, 0), 2)
+            cv2.putText(annotated, f"Rider {r['conf']:.2f}", (box[0], max(15, box[1] - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 200, 0), 1)
 
-        for h in detections["helmets"]:
+        # Draw Helmets
+        for h in detections.get("helmets", []):
             box = h["box"]
             cv2.rectangle(annotated, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 2)
-            cv2.putText(annotated, "Helmet", (box[0], box[1] - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            cv2.putText(annotated, "Helmet", (box[0], max(15, box[1] - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
 
-        for nh in detections["no_helmets"]:
+        # Draw No-Helmets
+        for nh in detections.get("no_helmets", []):
             box = nh["box"]
             cv2.rectangle(annotated, (box[0], box[1]), (box[2], box[3]), (0, 0, 255), 2)
-            cv2.putText(annotated, "NO HELMET", (box[0], box[1] - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
+            cv2.putText(annotated, "NO HELMET", (box[0], max(15, box[1] - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
-        for p in detections["plates"]:
-            box          = p["box"]
+        # Draw Triple Riding overlays
+        for v in violations:
+            if v.get("triple_riding") is not None:
+                t_box = v["triple_riding"]["box"]
+                count = v["triple_riding"].get("rider_count", 3)
+                cv2.rectangle(annotated, (t_box[0], t_box[1]), (t_box[2], t_box[3]), (255, 0, 180), 3)
+                cv2.putText(annotated, f"TRIPLE RIDING ({count} Riders)", (t_box[0], max(20, t_box[1] - 8)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 180), 2)
+
+        # Draw Plates
+        for p in detections.get("plates", []):
+            box = p["box"]
             is_violating = any(np.array_equal(box, vb) for vb in violating_plate_boxes)
-            color        = (0, 0, 255) if is_violating else (255, 100, 0)
-            label        = "Plate (VIOLATION)" if is_violating else f"Plate {p['conf']:.2f}"
+            color = (0, 0, 255) if is_violating else (255, 100, 0)
+            label = "Plate (VIOLATION)" if is_violating else f"Plate {p['conf']:.2f}"
             cv2.rectangle(annotated, (box[0], box[1]), (box[2], box[3]), color, 2)
-            cv2.putText(annotated, label, (box[0], box[1] - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+            cv2.putText(annotated, label, (box[0], max(15, box[1] - 5)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+
+        # Draw Tracked vehicle overlays and speeds if provided
+        if tracked_vehicles is not None:
+            for track_id, info in tracked_vehicles.items():
+                box = info.get("box")
+                speed = info.get("speed", 0.0)
+                if box is not None:
+                    is_overspeed = speed > speed_limit
+                    spd_color = (0, 50, 255) if is_overspeed else (0, 255, 180)
+                    spd_label = f"ID:{track_id} | {speed:.0f} km/h {'[SPEED ALERT]' if is_overspeed else ''}"
+                    cv2.putText(annotated, spd_label, (box[0], min(annotated.shape[0] - 10, box[3] + 15)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, spd_color, 2)
 
         return annotated

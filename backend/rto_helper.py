@@ -248,7 +248,7 @@ def generate_deterministic_rto_details(clean_plate):
 
     make, model, fuel = VEHICLE_MODELS[(seed_hash // 13) % len(VEHICLE_MODELS)]
 
-    year = 2018 + (seed_hash % 6)
+    year = 2012 + (seed_hash % 6)
     month = 1 + ((seed_hash // 3) % 12)
     day = 1 + ((seed_hash // 5) % 28)
     reg_date = f"{year}-{month:02d}-{day:02d}"

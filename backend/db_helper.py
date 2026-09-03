@@ -26,7 +26,9 @@ class ViolationDatabase:
         
         self.headers = [
             "violation_id", "timestamp", "plate_text", "ocr_confidence", "helmet_status", 
-            "plate_crop_path", "rider_crop_path", "owner_name", "vehicle_model", "challan_amount", "challan_path", "night_mode", "status"
+            "violation_type", "speed_recorded", "camera_id", "location",
+            "plate_crop_path", "rider_crop_path", "owner_name", "vehicle_model", 
+            "challan_amount", "challan_path", "night_mode", "status"
         ]
         
         # If CSV log does not exist, create it with headers
@@ -53,6 +55,14 @@ class ViolationDatabase:
                                 df[col] = "Unknown Owner"
                             elif col == "vehicle_model":
                                 df[col] = "Unknown Model"
+                            elif col == "violation_type":
+                                df[col] = "No Helmet"
+                            elif col == "speed_recorded":
+                                df[col] = 0.0
+                            elif col == "camera_id":
+                                df[col] = "CAM-01"
+                            elif col == "location":
+                                df[col] = "MG Road Crossing"
                             elif col == "night_mode":
                                 df[col] = False
                             elif col == "status":
@@ -67,7 +77,10 @@ class ViolationDatabase:
                 print(f"[DB] Error checking/migrating database headers: {e}")
 
     def log_violation(self, frame_timestamp, plate_crop, rider_crop, plate_text, ocr_conf, 
-                      helmet_status="no-helmet", night_mode=False):
+                      helmet_status="no-helmet", night_mode=False,
+                      violation_type="No Helmet", speed_recorded=0.0,
+                      camera_id="CAM-01", location="MG Road Crossing",
+                      challan_amount=None):
         """
         Logs a single violation, queries RTO info, generates E-Challan, and saves crop images.
         """
@@ -78,7 +91,18 @@ class ViolationDatabase:
         rto_info = query_rto(plate_text, config=self.config)
         owner_name = rto_info.get("owner_name", "Unknown Owner")
         vehicle_model = rto_info.get("vehicle_model", "Unknown Model")
-        challan_amount = 1000.0
+
+        # Determine fine amount according to violation types if not explicitly set
+        if challan_amount is None or challan_amount <= 0:
+            fine = 0.0
+            vt_lower = violation_type.lower()
+            if "helmet" in vt_lower:
+                fine += 1000.0
+            if "triple" in vt_lower:
+                fine += 1000.0
+            if "speed" in vt_lower:
+                fine += 2000.0
+            challan_amount = max(fine, 1000.0)
         
         plate_filename = f"plate_{violation_id}.png"
         rider_filename = f"rider_{violation_id}.png"
@@ -119,18 +143,22 @@ class ViolationDatabase:
             "plate_text": plate_text,
             "ocr_confidence": round(ocr_conf, 2),
             "helmet_status": helmet_status,
+            "violation_type": violation_type,
+            "speed_recorded": round(float(speed_recorded), 1),
+            "camera_id": camera_id,
+            "location": location,
             "plate_crop_path": plate_path,
             "rider_crop_path": rider_path,
             "owner_name": owner_name,
             "vehicle_model": vehicle_model,
-            "challan_amount": challan_amount,
+            "challan_amount": float(challan_amount),
             "challan_path": challan_path,
             "night_mode": night_mode,
             "status": "Pending"
         }
         
         with open(self.csv_log_path, mode='a', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=record.keys())
+            writer = csv.DictWriter(f, fieldnames=self.headers)
             writer.writerow(record)
             
         return record
@@ -211,6 +239,10 @@ class ViolationDatabase:
             "manufacturer_counts": pd.DataFrame(),
             "confidence_dist": pd.DataFrame(),
             "top_plates": pd.DataFrame(),
+            "violation_types": pd.DataFrame(),
+            "speed_dist": pd.DataFrame(),
+            "weekday_hour_matrix": pd.DataFrame(),
+            "camera_hotspots": pd.DataFrame(),
         }
 
         if df.empty:
@@ -239,6 +271,55 @@ class ViolationDatabase:
         hourly.columns = ["Hour", "Violations"]
         hourly["Violations"] = hourly["Violations"].astype(int)
         result["hourly_series"] = hourly
+
+        # --- Weekday × Hourly Matrix Heatmap ---
+        df["_day_name"] = df["_ts"].dt.day_name()
+        days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        matrix_data = []
+        for day in days_order:
+            day_df = df[df["_day_name"] == day]
+            counts = [int((day_df["_hour"] == h).sum()) for h in range(24)]
+            matrix_data.append(counts)
+        result["weekday_hour_matrix"] = pd.DataFrame(matrix_data, index=days_order, columns=[f"{h:02d}:00" for h in range(24)])
+
+        # --- Violation Type Breakdown ---
+        if "violation_type" in df.columns:
+            vt_series = df["violation_type"].fillna("No Helmet").astype(str)
+            # Normalize composite labels for aggregation
+            parsed_types = []
+            for item in vt_series:
+                if "triple" in item.lower() and "helmet" in item.lower():
+                    parsed_types.append("No Helmet + Triple Riding")
+                elif "triple" in item.lower():
+                    parsed_types.append("Triple Riding")
+                elif "speed" in item.lower():
+                    parsed_types.append("Over-Speeding")
+                else:
+                    parsed_types.append("No Helmet")
+            vt_df = pd.Series(parsed_types).value_counts().reset_index()
+            vt_df.columns = ["Violation Type", "Count"]
+            result["violation_types"] = vt_df
+        else:
+            result["violation_types"] = pd.DataFrame([{"Violation Type": "No Helmet", "Count": len(df)}])
+
+        # --- Vehicle Speed Distribution ---
+        if "speed_recorded" in df.columns:
+            speeds = pd.to_numeric(df["speed_recorded"], errors="coerce").dropna()
+            # Non-zero speeds
+            active_speeds = speeds[speeds > 0]
+            if not active_speeds.empty:
+                speed_bins = pd.cut(active_speeds, bins=[0, 40, 60, 80, 100, 150],
+                                    labels=["<40 km/h", "40-60 km/h (City)", "60-80 km/h (High)", "80-100 km/h (Speeding)", ">100 km/h (Extreme)"],
+                                    right=False)
+                spd_counts = speed_bins.value_counts().sort_index().reset_index()
+                spd_counts.columns = ["Speed Range", "Vehicle Count"]
+                result["speed_dist"] = spd_counts
+
+        # --- Camera Location Hotspots ---
+        if "location" in df.columns:
+            locs = df["location"].fillna("MG Road Crossing").astype(str).value_counts().reset_index()
+            locs.columns = ["Location", "Violations"]
+            result["camera_hotspots"] = locs
 
         # --- State breakdown (first 2 chars of plate) ---
         if "plate_text" in df.columns:

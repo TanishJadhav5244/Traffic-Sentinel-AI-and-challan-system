@@ -134,6 +134,34 @@ class VehicleTracker:
         kmh = mps * 3.6
         return round(kmh, 1)
 
+    def is_speed_violation(self, track_id, speed_limit=60.0):
+        """Returns True if the estimated speed exceeds the speed limit."""
+        speed = self.estimate_speed(track_id)
+        return speed > speed_limit, speed
+
+    def get_trajectory(self, track_id):
+        """Returns the list of (x, y) centroid points for the track trajectory."""
+        if track_id in self.track_history:
+            return [pt for _, pt in self.track_history[track_id]]
+        return []
+
+    def get_all_active_tracks(self, assigned_boxes, speed_limit=60.0):
+        """
+        Returns a dictionary of all active tracks with their bounding box,
+        centroid, estimated speed, speed alert status, and trajectory history.
+        """
+        tracks = {}
+        for track_id, box in assigned_boxes.items():
+            speed = self.estimate_speed(track_id)
+            tracks[track_id] = {
+                "box": box,
+                "centroid": self.objects.get(track_id, (0, 0)),
+                "speed": speed,
+                "is_speed_violation": speed > speed_limit,
+                "trajectory": self.get_trajectory(track_id)
+            }
+        return tracks
+
     def is_duplicate_plate(self, plate_number):
         """
         Checks whether a plate was ticketed recently within the cooldown window.
@@ -156,3 +184,4 @@ class VehicleTracker:
         if plate_number and len(plate_number.strip()) >= 4:
             clean_plate = plate_number.upper().replace(" ", "")
             self.ticketed_plates[clean_plate] = time.time()
+
