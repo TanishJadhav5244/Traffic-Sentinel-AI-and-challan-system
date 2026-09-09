@@ -169,6 +169,7 @@ class EChallanPaymentGateway:
                 match = df[df["challan_id"].astype(str) == str(challan_id)]
                 if not match.empty:
                     violation = match.iloc[0].to_dict()
+                    # Here the violation is done under the similar
 
         if not violation:
             return {"status": "ERROR", "message": f"Challan #{challan_id} not found."}
@@ -232,7 +233,7 @@ class EChallanPaymentGateway:
         f_title = get_font("arial", 20, bold=True)
         draw.text((20, 18), "OFFICIAL E-CHALLAN PAYMENT RECEIPT", fill=(255, 255, 255), font=f_title)
 
-        f_sub = get_font("arial", 11)
+        f_sub = get_font("arial", 12)
         draw.text((20, 48), "MINISTRY OF ROAD TRANSPORT & HIGHWAYS | PARIVAHAN SUVIDHA", fill=(220, 252, 231), font=f_sub)
         draw.text((20, 65), f"Generated: {payment_time}", fill=(187, 247, 208), font=f_sub)
 
@@ -251,7 +252,7 @@ class EChallanPaymentGateway:
             ("Payment Status:", "CONFIRMED & PAID"),
             ("Gateway Provider:", self.gateway.__class__.__name__),
         ]
-
+# SUM HERE IS also the less one 
         y = 110
         for label, val in rows:
             draw.text((40, y), label, fill=(15, 23, 42), font=f_label)
@@ -260,23 +261,26 @@ class EChallanPaymentGateway:
             draw.line([(40, y + 25), (canvas_w - 40, y + 25)], fill=(241, 245, 249), width=1)
             y += 33
 
-        # UPI QR code placeholder
+        # Official Verification QR Code
         qr_y = y + 15
-        qr_size = 80
-        draw.rectangle([40, qr_y, 40 + qr_size, qr_y + qr_size], fill=(245, 245, 245), outline=(34, 197, 94), width=2)
+        qr_size = 85
+        verify_url = f"https://echallan.parivahan.gov.in/verify?txn={transaction_id}&cid={challan_id}&plate={plate_number}&status=PAID"
 
-        # Draw mini QR pattern
-        cell = qr_size // 10
-        for r in range(10):
-            for c in range(10):
-                if (abs(hash(f"{transaction_id}{r}{c}")) % 3) < 2:
-                    draw.rectangle(
-                        [40 + c * cell, qr_y + r * cell, 40 + (c + 1) * cell, qr_y + (r + 1) * cell],
-                        fill=(22, 101, 52)
-                    )
+        try:
+            import qrcode
+            qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=3, border=1)
+            qr.add_data(verify_url)
+            qr.make(fit=True)
+            qr_img = qr.make_image(fill_color="#166534", back_color="#ffffff").convert("RGB")
+            qr_img = qr_img.resize((qr_size, qr_size), Image.Resampling.LANCZOS)
+            img.paste(qr_img, (40, qr_y))
+            draw.rectangle([39, qr_y - 1, 40 + qr_size, qr_y + qr_size], outline=(34, 197, 94), width=2)
+        except Exception:
+            draw.rectangle([40, qr_y, 40 + qr_size, qr_y + qr_size], fill=(245, 245, 245), outline=(34, 197, 94), width=2)
 
         f_qr = get_font("arial", 9, bold=True)
         draw.text((40, qr_y + qr_size + 5), "SCAN FOR VERIFICATION", fill=(22, 101, 52), font=f_qr)
+
 
         # Footer stamp
         stamp_y = qr_y + qr_size + 25
@@ -340,7 +344,7 @@ class EChallanPaymentGateway:
         paid_mask = (statuses == "PAID")
         pending_mask = (statuses == "PENDING")
 
-        total_collected = float(fines[paid_mask].sum()) if any(paid_mask) else 0.0
+        total_collected = float(fines[paid_mask].sum()) if any( paid_mask) else 0.0
         total_pending = float(fines[pending_mask].sum()) if any(pending_mask) else 0.0
         total_fines = total_collected + total_pending
 

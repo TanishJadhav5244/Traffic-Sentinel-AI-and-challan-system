@@ -948,3 +948,61 @@ div[data-testid="stBaseButton-secondary"] button:hover {
     height: 24px;
     background: rgba(255,255,255,0.06);
 }
+
+/* ═══════════════════════════════════════════════════════
+   MODULE NAV BUTTONS — Center-page project module strip
+   ═══════════════════════════════════════════════════════ */
+.module-nav-label {
+    text-align: center;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #475569;
+    margin: 0.5rem 0 0.6rem;
+    padding: 0;
+}
+
+/* Wrap the label + columns in a styled container via the stMarkdown sibling */
+.module-nav-label ~ div [data-testid="stHorizontalBlock"] {
+    background: linear-gradient(135deg, rgba(26,31,46,0.95) 0%, rgba(15,17,23,0.98) 100%);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 0.8rem 1rem;
+    gap: 0.5rem;
+}
+
+/* Active (primary) module nav button */
+[data-testid="stHorizontalBlock"] [data-testid="stButton"] button[kind="primary"] {
+    background: linear-gradient(135deg, rgba(212,162,78,0.22) 0%, rgba(249,115,22,0.15) 100%) !important;
+    border: 1px solid rgba(212,162,78,0.55) !important;
+    color: #d4a24e !important;
+    font-weight: 700 !important;
+    font-size: 0.78rem !important;
+    box-shadow: 0 0 14px rgba(212,162,78,0.18), inset 0 1px 0 rgba(212,162,78,0.15) !important;
+    letter-spacing: 0.03em;
+    border-radius: 10px !important;
+    transition: all 0.2s ease !important;
+}
+
+/* Inactive module nav buttons */
+[data-testid="stHorizontalBlock"] [data-testid="stButton"] button[kind="secondary"] {
+    background: rgba(255,255,255,0.04) !important;
+    border: 1px solid rgba(255,255,255,0.09) !important;
+    color: #94a3b8 !important;
+    font-size: 0.78rem !important;
+    font-weight: 600 !important;
+    border-radius: 10px !important;
+    transition: all 0.18s ease !important;
+}
+
+[data-testid="stHorizontalBlock"] [data-testid="stButton"] button[kind="secondary"]:hover {
+    background: rgba(212,162,78,0.08) !important;
+    border-color: rgba(212,162,78,0.35) !important;
+    color: #d4a24e !important;
+    transform: translateY(-1px) !important;
+}
+
+
+
+

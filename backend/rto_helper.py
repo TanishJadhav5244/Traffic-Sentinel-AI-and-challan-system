@@ -209,38 +209,73 @@ DEMO_RTO_REGISTRY = {
         "owner_name": "Tukaram jadhav",
         "vehicle_make": "Toyota",
         "vehicle_model": "Fortuner",
+        "vehicle_class": "4-Wheeler (LMV / SUV)",
         "fuel_type": "Diesel",
         "insurance_status": "Active (Insured till 2028)",
-        "registration_date": "2013-12-05",
+        "registration_date": "2027-12-04",
         "rto_office": "MH-10 Sangli",
         "status": "Active (Registered)",
-        "pucc_status": "Valid",
+        "pucc_status": "Valid (Pollution Passed)",
+        "road_tax": "Life Time Tax (LTT) Paid",
         "api_source": "RTO Parivahan Vahan Registry"
     },
     "MH10ER8266": {
         "owner_name": "Tanish jadhav",
-        "vehicle_make": "Royal Enfiled",
+        "vehicle_make": "Royal Enfield",
         "vehicle_model": "Classic 350",
+        "vehicle_class": "2-Wheeler (Motorcycle)",
         "fuel_type": "Petrol",
         "insurance_status": "Active (Insured till 2028)",
         "registration_date": "2025-06-15",
         "rto_office": "MH-10 Sangli",
         "status": "Active (Registered)",
-        "pucc_status": "Valid",
+        "pucc_status": "Valid (Pollution Passed)",
+        "road_tax": "Life Time Tax (LTT) Paid",
         "api_source": "RTO Parivahan Vahan Registry"
     },
-    "MH10BM": {
+    "MH10BM2431": {
         "owner_name": "Tanish jadhav",
-        "vehicle_make": "Royal Enfiled",
-        "vehicle_model": "Classic 350",
+        "vehicle_make": "Hyundai EON",
+        "vehicle_model": "ERA +",
+        "vehicle_class": "4-Wheeler (LMV / Hatchback)",
         "fuel_type": "Petrol",
         "insurance_status": "Active (Insured till 2028)",
-        "registration_date": "2025-06-15",
+        "registration_date": "2013-12-05",
         "rto_office": "MH-10 Sangli",
         "status": "Active (Registered)",
-        "pucc_status": "Valid",
+        "pucc_status": "Valid (Pollution Passed)",
+        "road_tax": "Life Time Tax (LTT) Paid",
         "api_source": "RTO Parivahan Vahan Registry"
+    },
+    "MH40BE5089" : {
+        "owner_name": "Yogesh Jadhav",
+        "vehicle_make": "TVS",
+        "vehicle_model": "TVS Jupiter",
+        "vehicle_class": "2-Wheeler (Motorcycle)",
+        "fuel_type": "Petrol",
+        "insurance_status": "Active (Insured till 2026)",
+        "registration_date": "2021-06-15",
+        "rto_office": "MH-40 Sangli",
+        "status": "Active (Registered)",
+        "pucc_status": "Valid (Pollution Passed)",
+        "road_tax": "Life Time Tax (LTT) Paid",
+        "api_source": "RTO Parivahan Vahan Registry"
+    },
+    "MH40BE2584" : {
+        "owner_name": "Digvijay Jadhav",
+        "vehicle_make": "Tata",
+        "vehicle_model": "Tata curvv",
+        "vehicle_class": "4-Wheeler (Car)",
+        "fuel_type": "Diesel",
+        "insurance_status": "Active (Insured till 2026)",
+        "registration_date": "2009-06-26",
+        "rto_office": "MH-40 kolhapur",
+        "status": "Active (Registered)",
+        "pucc_status": "Valid (Pollution Failed)",
+        "road_tax": "Life Time Tax (LTT) Paid",
+        "api_source": "RTO Parivahan Registry"
     }
+
 }
 
 OWNER_FIRST_NAMES = ["Rajesh", "Suresh", "Ananya", "Vikram", "Priya", "Amit", "Neha", "Rohan", "Deepak", "Sunil", "Pooja", "Aakash", "Kavita", "Sanjay", "Meera"]
@@ -325,12 +360,26 @@ def query_rto(plate_number, config=None):
         if res and res.get("lookup_status") == "success":
             return res
 
-    # 2. Demo Registry Match
+    # 2. Demo Registry Match (Exact or OCR-Disambiguated match)
     if clean_plate in DEMO_RTO_REGISTRY:
         return DEMO_RTO_REGISTRY[clean_plate]
 
+    # Check for common OCR character confusions against known registered plates
+    # (e.g. 'O' recognized as '0', 'I' recognized as '1', etc.)
+    ocr_equivs = {'O': '0', '0': 'O', 'I': '1', '1': 'I', 'Z': '2', '2': 'Z', 'S': '5', '5': 'S', 'B': '8', '8': 'B'}
+    for reg_plate, reg_data in DEMO_RTO_REGISTRY.items():
+        if len(reg_plate) == len(clean_plate):
+            diffs = [(a, b) for a, b in zip(clean_plate, reg_plate) if a != b]
+            if len(diffs) == 1 and ocr_equivs.get(diffs[0][0]) == diffs[0][1]:
+                corrected = dict(reg_data)
+                corrected["ocr_auto_corrected"] = True
+                corrected["original_ocr"] = clean_plate
+                return corrected
+
     # 3. Official Indian RTO District Generator Fallback
-    return generate_deterministic_rto_details(clean_plate)
+    res = generate_deterministic_rto_details(clean_plate)
+    return res
+
 
 
 def _fetch_from_external_rto_api(plate_number, provider, api_url, api_key, timeout=5.0):

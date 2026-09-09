@@ -183,3 +183,45 @@ def render_status_chip(status: str) -> str:
     else:
         return '<span style="background:#fef3c7; color:#b45309; border:1px solid #fcd34d; padding:2px 8px; border-radius:12px; font-weight:600; font-size:0.8rem;">🟡 Pending</span>'
 
+
+def render_module_nav_buttons(active_module: str = "live"):
+    """Renders a premium horizontal module navigation button strip.
+
+    Uses only native Streamlit buttons so there is no raw-HTML rendering
+    issue. The active button is highlighted via the ``primary`` type and
+    the inactive ones via ``secondary``.  Clicking any button stores the
+    chosen key in ``st.session_state['active_module']`` and reruns.
+    """
+    modules = [
+        {"key": "live",      "icon": "📸", "name": "Live"},
+        {"key": "ocr",       "icon": "🔬", "name": "OCR Lab"},
+        {"key": "database",  "icon": "📊", "name": "Database"},
+        {"key": "payment",   "icon": "💳", "name": "e-Challan"},
+        {"key": "rto",       "icon": "🔍", "name": "RTO"},
+        {"key": "analytics", "icon": "📈", "name": "Analytics"},
+        {"key": "api",       "icon": "🔌", "name": "REST API"},
+    ]
+
+    if "active_module" not in st.session_state:
+        st.session_state.active_module = active_module
+
+    # Decorative label above the buttons
+    st.markdown(
+        '<p class="module-nav-label">⚙ Traffic Sentinel AI — Select Module</p>',
+        unsafe_allow_html=True,
+    )
+
+    cols = st.columns(len(modules))
+    for col, m in zip(cols, modules):
+        with col:
+            is_active = st.session_state.get("active_module") == m["key"]
+            if st.button(
+                f"{m['icon']} {m['name']}",
+                key=f"modnav_{m['key']}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+            ):
+                st.session_state.active_module = m["key"]
+                st.rerun()
+
+

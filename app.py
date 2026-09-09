@@ -39,6 +39,7 @@ from frontend.components import (
     render_cctv_hud_header,
     render_telemetry_badge,
     render_status_chip,
+    render_module_nav_buttons,
 )
 
 # Shim for legacy panel helpers used in this file
@@ -117,6 +118,10 @@ notification_center = get_notification_center(config)
 render_gov_header()
 _violation_df = db.get_all_violations()
 render_hero(violation_count=len(_violation_df))
+
+# ── Module Navigation Buttons ─────────────────────────
+_active_mod = st.session_state.get("active_module", "live")
+render_module_nav_buttons(active_module=_active_mod)
 
 # ── Sidebar ──────────────────────────────────────────────
 # System status at the top so the user sees it immediately
@@ -988,12 +993,28 @@ with tab_payment:
 
                     with col_qr_code:
                         st.markdown("#### 📱 Scan UPI QR to Pay")
-                        st.caption(f"Scan with any UPI app to pay **₹{amt:,.2f}** instantly to MoRTH.")
-                        # UPI QR Simulation Box
+                        st.caption(f"Scan with any UPI app (GPay, PhonePe, Paytm) to pay **₹{amt:,.2f}**.")
+                        
+                        upi_payload_str = f"upi://pay?pa=morth.challan@gov.in&pn=MoRTH%20Traffic%20Police&am={amt:.2f}&tn=Challan%20{v_id}&tr={v_id}"
+                        try:
+                            import qrcode
+                            import io
+                            import base64
+                            qr_obj = qrcode.QRCode(version=1, box_size=5, border=1)
+                            qr_obj.add_data(upi_payload_str)
+                            qr_obj.make(fit=True)
+                            qr_pil_img = qr_obj.make_image(fill_color="#0f172a", back_color="#ffffff")
+                            qr_buf = io.BytesIO()
+                            qr_pil_img.save(qr_buf, format="PNG")
+                            qr_src = f"data:image/png;base64,{base64.b64encode(qr_buf.getvalue()).decode()}"
+                        except Exception:
+                            qr_src = f"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data={upi_payload_str}"
+
                         st.markdown(f"""
-                        <div style="background: #ffffff; padding: 12px; border-radius: 10px; width: 170px; text-align: center; border: 2px solid #22c55e; margin: 0 auto 10px auto;">
-                            <img src="https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=upi://pay?pa=morth.challan@gov.in&pn=MoRTH%20Traffic%20Police&am={amt:.2f}&tn=Challan%20{v_id}" width="140" height="140" style="display:block; margin:0 auto;"/>
-                            <div style="color: #0f172a; font-size: 0.7rem; font-weight: 700; margin-top: 4px;">SCAN & PAY ₹{amt:.0f}</div>
+                        <div style="background: #ffffff; padding: 14px; border-radius: 12px; width: 180px; text-align: center; border: 2px solid #22c55e; margin: 0 auto 10px auto; box-shadow: 0 4px 12px rgba(0,0,0,0.25);">
+                            <img src="{qr_src}" width="150" height="150" style="display:block; margin:0 auto; border-radius:4px;"/>
+                            <div style="color: #0f172a; font-size: 0.72rem; font-weight: 700; margin-top: 6px;">SCAN & PAY ₹{amt:.0f}</div>
+                            <div style="color: #16a34a; font-size: 0.65rem; font-weight: 600;">Verified Parivahan Gateway</div>
                         </div>
                         """, unsafe_allow_html=True)
                 else:
@@ -1267,12 +1288,36 @@ with tab_rto:
                                 <span class="rc-badge {ins_badge}">{ins_label}</span>
                             </div>
                         </div>
+                        <div class="rc-field">
+                            <div class="rc-label">PUCC Emission Status</div>
+                            <div class="rc-value" style="color: #22c55e;">{rto_info.get('pucc_status', 'Valid (Passed)')}</div>
+                        </div>
+                        <div class="rc-field">
+                            <div class="rc-label">Road Tax Status</div>
+                            <div class="rc-value">{rto_info.get('road_tax', 'Life Time Tax (LTT) Paid')}</div>
+                        </div>
                     </div>
                     <div style="margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 10px; font-size: 0.65rem; color: #64748b; text-align: center;">
                         Database Source: {rto_info.get('api_source', 'RTO Parivahan Vahan Registry')} | Chip Serial: MoRTH-CS-{abs(hash(clean_plate_no)) % 100000000:08d}
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
+
+                # ── Live Traffic Citation Cross-Check ──
+                v_df = db.get_all_violations()
+                v_matches = v_df[v_df["plate_text"].astype(str).str.upper().str.replace(" ", "") == clean_plate_no] if not v_df.empty else pd.DataFrame()
+                p_fines = v_matches[v_matches["status"].astype(str).str.upper() == "PENDING"] if not v_matches.empty else pd.DataFrame()
+
+                if not p_fines.empty:
+                    total_amt = float(p_fines["challan_amount"].astype(float).sum())
+                    st.error(f"🚨 **Action Required: {len(p_fines)} Outstanding Traffic Citation(s) Found!** Total fine pending: **₹{total_amt:,.2f}**")
+                    for _, p_row in p_fines.iterrows():
+                        st.caption(f"• **Challan #{p_row['violation_id']}** — {p_row.get('violation_type', 'No Helmet')} | Recorded: {p_row.get('timestamp', 'N/A')} | Fine: ₹{float(p_row.get('challan_amount', 1000)):,.0f}")
+                elif not v_matches.empty:
+                    st.success(f"✔ **Clean Record**: All past citations ({len(v_matches)}) for vehicle **{clean_plate_no}** have been settled and cleared.")
+                else:
+                    st.info(f"✔ **Clean Record**: Zero traffic violations recorded on surveillance network for vehicle **{clean_plate_no}**.")
+
 
 # ---------------------------------------------------------
 # TAB 5: Analytics Dashboard

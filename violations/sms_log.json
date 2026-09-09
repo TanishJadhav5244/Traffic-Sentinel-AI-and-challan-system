@@ -8,5 +8,15 @@
     "timestamp": "2026-09-03 15:26:43",
     "challan_id": "TEST01",
     "plate": "MH12DE5678"
+  },
+  {
+    "type": "SMS",
+    "provider": "DemoSMSGateway",
+    "recipient": "+919706944671",
+    "message": "Traffic Sentinel: E-Challan #71a6ffee issued for UNKNOWN. Fine: INR 1000. Pay at echallan.parivahan.gov.in",
+    "status": "MOCK_DELIVERED",
+    "timestamp": "2026-09-08 14:46:31",
+    "challan_id": "71a6ffee",
+    "plate": "UNKNOWN"
   }
 ]
