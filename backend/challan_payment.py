@@ -182,7 +182,7 @@ class EChallanPaymentGateway:
         if tx_result.get("status") != "SUCCESS":
             return {
                 "status": "FAILED",
-                "message": "Payment processing failed.",
+                "message": "Payment processing failed try again .",
                 "transaction": tx_result
             }
 

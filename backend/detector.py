@@ -222,8 +222,8 @@ class VehicleHelmetDetector:
     def _detect_coco_fallback(self, img):
         """
         COCO-mode fallback:
-          - Riders      -> person (class 0) + motorcycle (class 3) spatial association
-          - Helmets     -> head-region skin-tone heuristic
+          - Riders      -> person (class 0) + motorcycle (class 3) / bicycle (class 1) spatial association
+          - Helmets     -> head-region multi-signal heuristic
           - Plates      -> OpenCV contour-based detection
         """
         detections = {"riders": [], "helmets": [], "no_helmets": [], "plates": []}
@@ -233,24 +233,42 @@ class VehicleHelmetDetector:
 
         results  = self.model(img, verbose=False)[0]
         persons, motos = [], []
+        h_img, w_img = img.shape[:2]
 
         for box in results.boxes:
             cls_id = int(box.cls[0])
             conf   = float(box.conf[0])
             xyxy   = box.xyxy[0].cpu().numpy().astype(int)
-            if cls_id == 0 and conf >= 0.35:    # person
+            if cls_id == 0 and conf >= 0.30:    # person (lowered threshold)
                 persons.append({"box": xyxy, "conf": conf})
-            elif cls_id == 3 and conf >= 0.35:  # motorcycle
+            elif cls_id in (1, 3) and conf >= 0.30:  # bicycle(1) or motorcycle(3)
                 motos.append({"box": xyxy, "conf": conf})
 
         detections["riders"] = self._associate_riders(persons, motos)
 
+        # Fallback: if no two-wheelers detected but persons are found, check
+        # if any person box overlaps the lower half of the image (typical for
+        # riders on bikes/scooters in traffic camera footage).
+        if not detections["riders"] and persons:
+            for person in persons:
+                p_box = person["box"]
+                p_bottom = p_box[3]
+                p_height = p_box[3] - p_box[1]
+                # Person whose bottom edge is in the lower 60% of the image
+                # and is tall enough to plausibly be a rider
+                if p_bottom > h_img * 0.4 and p_height > h_img * 0.25:
+                    detections["riders"].append({"box": p_box, "conf": person["conf"]})
+
         # Head heuristic for each rider
+        # In COCO fallback mode (no custom helmet model), we must err on the
+        # side of safety: if we cannot *confidently* identify a helmet, the
+        # rider is flagged as "no_helmet".
         for rider in detections["riders"]:
             result = self._head_region_heuristic(img, rider["box"])
             if result == "helmet":
                 detections["helmets"].append({"box": rider["box"], "conf": 0.5})
-            elif result == "no_helmet":
+            else:
+                # Both "no_helmet" and "unknown" are treated as violations
                 detections["no_helmets"].append({"box": rider["box"], "conf": 0.5})
 
         # Contour-based plate detection
@@ -263,20 +281,28 @@ class VehicleHelmetDetector:
     # ──────────────────────────────────────────────────────────────────────────
 
     def _coco_rider_detection(self, img):
-        """Detects riders via COCO person+motorcycle class association."""
+        """Detects riders via COCO person+motorcycle/bicycle class association."""
         if self.model is None:
             return []
         results = self.model(img, verbose=False)[0]
         persons, motos = [], []
+        h_img, w_img = img.shape[:2]
         for box in results.boxes:
             cls_id = int(box.cls[0])
             conf   = float(box.conf[0])
             xyxy   = box.xyxy[0].cpu().numpy().astype(int)
-            if cls_id == 0 and conf >= 0.35:
+            if cls_id == 0 and conf >= 0.30:
                 persons.append({"box": xyxy, "conf": conf})
-            elif cls_id == 3 and conf >= 0.35:
+            elif cls_id in (1, 3) and conf >= 0.30:
                 motos.append({"box": xyxy, "conf": conf})
-        return self._associate_riders(persons, motos)
+        riders = self._associate_riders(persons, motos)
+        # Fallback: persons in lower half of frame as potential riders
+        if not riders and persons:
+            for person in persons:
+                p_box = person["box"]
+                if p_box[3] > h_img * 0.4 and (p_box[3] - p_box[1]) > h_img * 0.25:
+                    riders.append({"box": p_box, "conf": person["conf"]})
+        return riders
 
     def _associate_riders(self, persons, motos):
         """Associates person detections with overlapping motorcycle detections."""
@@ -338,27 +364,87 @@ class VehicleHelmetDetector:
 
     def _head_region_heuristic(self, img, rider_box):
         """
-        Crops the upper 22% of the rider box and checks skin-tone dominance.
+        Crops the upper portion of the rider bounding box and uses multiple
+        heuristic signals to determine whether a helmet is present:
+          1. Skin-tone ratio (HSV-based)
+          2. Color variance / saturation in the head region
+          3. Edge density (helmets are smooth, hair/faces have more edges)
+          4. Dark-region dominance (helmets are often dark, rounded objects)
+
         Returns: "helmet", "no_helmet", or "unknown"
         """
         try:
             x1, y1, x2, y2 = rider_box
-            head_h    = max(1, int((y2 - y1) * 0.22))
+            rider_h = y2 - y1
+            rider_w = x2 - x1
+            if rider_h < 20 or rider_w < 15:
+                return "no_helmet"
+
+            # Crop the upper 25% of the rider box (head region)
+            head_h    = max(1, int(rider_h * 0.25))
             head_crop = img[y1:y1 + head_h, x1:x2]
             if head_crop.size == 0:
-                return "unknown"
-            hsv        = cv2.cvtColor(head_crop, cv2.COLOR_BGR2HSV)
-            lower_skin = np.array([0,  20,  70], dtype=np.uint8)
-            upper_skin = np.array([20, 255, 255], dtype=np.uint8)
-            skin_mask  = cv2.inRange(hsv, lower_skin, upper_skin)
-            skin_ratio = np.sum(skin_mask > 0) / skin_mask.size
-            if skin_ratio > 0.18:
                 return "no_helmet"
-            elif skin_ratio < 0.05:
+
+            # ── Signal 1: Skin-tone ratio (two HSV ranges for diverse skin) ──
+            hsv = cv2.cvtColor(head_crop, cv2.COLOR_BGR2HSV)
+            # Range 1: lighter skin tones
+            skin_mask1 = cv2.inRange(hsv,
+                                     np.array([0,  20,  70], dtype=np.uint8),
+                                     np.array([25, 255, 255], dtype=np.uint8))
+            # Range 2: darker / brown skin tones
+            skin_mask2 = cv2.inRange(hsv,
+                                     np.array([0,  10,  40], dtype=np.uint8),
+                                     np.array([30, 180, 200], dtype=np.uint8))
+            skin_mask  = cv2.bitwise_or(skin_mask1, skin_mask2)
+            skin_ratio = np.sum(skin_mask > 0) / max(1, skin_mask.size)
+
+            # ── Signal 2: Color variance (helmets are typically uniform colour) ──
+            gray_head = cv2.cvtColor(head_crop, cv2.COLOR_BGR2GRAY)
+            color_std = float(np.std(gray_head))
+
+            # ── Signal 3: Edge density (helmets are smooth → fewer edges) ──
+            edges      = cv2.Canny(gray_head, 50, 150)
+            edge_ratio = np.sum(edges > 0) / max(1, edges.size)
+
+            # ── Signal 4: Dark-region ratio (many helmets are dark-coloured) ──
+            dark_ratio = np.sum(gray_head < 60) / max(1, gray_head.size)
+
+            # ── Decision logic ──
+            helmet_score = 0.0
+
+            # High skin exposure → almost certainly no helmet
+            if skin_ratio > 0.15:
+                return "no_helmet"
+
+            # Very low skin + low edge density + low colour variance → likely helmet
+            if skin_ratio < 0.04:
+                helmet_score += 1.0
+            if edge_ratio < 0.08:
+                helmet_score += 1.0
+            if color_std < 35:
+                helmet_score += 0.5
+            # Dark head region can indicate a dark helmet
+            if dark_ratio > 0.5 and edge_ratio < 0.12:
+                helmet_score += 0.5
+
+            # Hair / face → more edges, more variance, some skin
+            if edge_ratio > 0.15:
+                helmet_score -= 1.0
+            if color_std > 50:
+                helmet_score -= 0.5
+            if skin_ratio > 0.08:
+                helmet_score -= 0.5
+
+            if helmet_score >= 2.0:
                 return "helmet"
+            else:
+                return "no_helmet"
+
         except Exception:
             pass
-        return "unknown"
+        # Default: no helmet (safety-first assumption)
+        return "no_helmet"
 
     @staticmethod
     def _is_duplicate_box(xyxy, existing, iou_threshold=0.4):
@@ -494,57 +580,68 @@ class VehicleHelmetDetector:
                         min_dist   = dist
                         best_plate = (idx, plate)
 
+            # Find the rider containing or nearest to this no-helmet detection
+            best_rider = None
+            r_min_dist = float("inf")
+            for rider in detections.get("riders", []):
+                r_box = rider["box"]
+                if (r_box[0] <= nh_box[0] and r_box[1] <= nh_box[1]
+                        and r_box[2] >= nh_box[2] and r_box[3] >= nh_box[3]):
+                    best_rider = rider
+                    break
+                r_center  = ((r_box[0] + r_box[2]) / 2, (r_box[1] + r_box[3]) / 2)
+                nh_center = ((nh_box[0] + nh_box[2]) / 2, (nh_box[1] + nh_box[3]) / 2)
+                dist = np.hypot(r_center[0] - nh_center[0], r_center[1] - nh_center[1])
+                if dist < r_min_dist:
+                    r_min_dist = dist
+                    best_rider = rider
+
             if best_plate is not None:
                 idx, plate_info = best_plate
                 used_plates.add(idx)
+            else:
+                # No plate detected — create a synthetic plate region from the
+                # rider's lower body so the violation is still flagged.
+                ref_box = best_rider["box"] if best_rider else nh_box
+                synthetic_plate_box = np.array([
+                    ref_box[0],
+                    ref_box[3] - max(1, int((ref_box[3] - ref_box[1]) * 0.15)),
+                    ref_box[2],
+                    ref_box[3]
+                ])
+                plate_info = {"box": synthetic_plate_box, "conf": 0.0}
 
-                # Find the rider containing or nearest to this head
-                best_rider = None
-                r_min_dist = float("inf")
-                for rider in detections.get("riders", []):
-                    r_box = rider["box"]
-                    if (r_box[0] <= nh_box[0] and r_box[1] <= nh_box[1]
-                            and r_box[2] >= nh_box[2] and r_box[3] >= nh_box[3]):
-                        best_rider = rider
-                        break
-                    r_center  = ((r_box[0] + r_box[2]) / 2, (r_box[1] + r_box[3]) / 2)
-                    nh_center = ((nh_box[0] + nh_box[2]) / 2, (nh_box[1] + nh_box[3]) / 2)
-                    dist = np.hypot(r_center[0] - nh_center[0], r_center[1] - nh_center[1])
-                    if dist < r_min_dist:
-                        r_min_dist = dist
-                        best_rider = rider
+            # Check if this rider is also part of a triple-riding cluster
+            v_types = ["No Helmet"]
+            fine = 1000.0
+            associated_triple = None
 
-                # Check if this rider is also part of a triple-riding cluster
-                v_types = ["No Helmet"]
-                fine = 1000.0
-                associated_triple = None
+            for tc in triple_clusters:
+                t_box = tc["box"]
+                if (best_rider and t_box[0] <= best_rider["box"][0] and t_box[2] >= best_rider["box"][2]) or \
+                   (t_box[0] <= nh_box[0] and t_box[2] >= nh_box[2]):
+                    v_types.append(f"Triple Riding ({tc['rider_count']} Riders)")
+                    fine += 1000.0
+                    associated_triple = tc
+                    break
 
-                for tc in triple_clusters:
-                    t_box = tc["box"]
-                    if (best_rider and t_box[0] <= best_rider["box"][0] and t_box[2] >= best_rider["box"][2]) or \
-                       (t_box[0] <= nh_box[0] and t_box[2] >= nh_box[2]):
-                        v_types.append(f"Triple Riding ({tc['rider_count']} Riders)")
-                        fine += 1000.0
-                        associated_triple = tc
-                        break
+            # Check speed violation
+            if speed_kmh is not None and speed_kmh > speed_limit:
+                v_types.append(f"Over-Speeding ({speed_kmh:.1f} km/h)")
+                fine += 2000.0
 
-                # Check speed violation
-                if speed_kmh is not None and speed_kmh > speed_limit:
-                    v_types.append(f"Over-Speeding ({speed_kmh:.1f} km/h)")
-                    fine += 2000.0
+            severity = "CRITICAL" if len(v_types) > 1 or (speed_kmh and speed_kmh > speed_limit + 20) else "HIGH"
 
-                severity = "CRITICAL" if len(v_types) > 1 or (speed_kmh and speed_kmh > speed_limit + 20) else "HIGH"
-
-                pairs.append({
-                    "violation_types": v_types,
-                    "fine_amount": fine,
-                    "no_helmet": no_helmet,
-                    "plate": plate_info,
-                    "rider": best_rider if best_rider else no_helmet,
-                    "triple_riding": associated_triple,
-                    "speed_kmh": speed_kmh or 0.0,
-                    "severity": severity
-                })
+            pairs.append({
+                "violation_types": v_types,
+                "fine_amount": fine,
+                "no_helmet": no_helmet,
+                "plate": plate_info,
+                "rider": best_rider if best_rider else no_helmet,
+                "triple_riding": associated_triple,
+                "speed_kmh": speed_kmh or 0.0,
+                "severity": severity
+            })
 
         # Step 3: Handle standalone Triple-Riding violations if helmet was worn
         for tc in triple_clusters:
